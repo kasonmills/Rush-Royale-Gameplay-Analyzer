@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Large asset files — too big for git, managed locally
+assets/raw/
+assets/reference/
+
+# Databases
+data/
+
+# APK / OBB source files
+*.apk
+*.obb
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
