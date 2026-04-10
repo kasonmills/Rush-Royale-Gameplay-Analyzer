@@ -12,8 +12,11 @@ build/
 assets/raw/
 assets/reference/
 
-# Databases
-data/
+# Databases (binary — not committed)
+data/*.db
+
+# Sheet CSV exports ARE committed as research snapshots
+# (data/sheet_exports/*.csv go into git)
 
 # APK / OBB source files
 *.apk

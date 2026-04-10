@@ -117,19 +117,47 @@ CREATE TABLE IF NOT EXISTS synergies (
 
 CREATE TABLE IF NOT EXISTS heroes (
     hero_id             TEXT    PRIMARY KEY,
-    display_name        TEXT    NOT NULL,
-    set_number          INTEGER NOT NULL,   -- 1-5
-    ability_name        TEXT    NOT NULL,
-    ability_type        TEXT,               -- 'Active - Main', 'Passive', etc.
-    morale_cost         INTEGER,
+    display_name        TEXT    NOT NULL
+);
+
+-- One row per ability set (sets 1-5) per hero.
+-- Set 5 is always "Second Wind" (passive) and is unlocked after 80 total points invested.
+CREATE TABLE IF NOT EXISTS hero_ability_sets (
+    hero_id                  TEXT    NOT NULL REFERENCES heroes(hero_id),
+    set_number               INTEGER NOT NULL,  -- 1-5
+    ability_name             TEXT    NOT NULL,
+    ability_type             TEXT,              -- 'Active - Main', 'Active - Secondary', 'Passive'
+    morale_cost              INTEGER,
+    description              TEXT,
+    unlock_points_required   INTEGER,           -- total hero points needed to unlock this set (set 5 = 80)
+    observable_sigs          TEXT,              -- behavioral/visual signatures for this ability
+    research_status          TEXT    NOT NULL DEFAULT 'Not Started',
+    last_updated             TEXT,
+    PRIMARY KEY (hero_id, set_number)
+);
+
+-- Investment sets per ability set.
+-- Each investment set is a named category the player allocates points into
+-- (e.g. "Generate mana", "Monster health"). Rules vary per hero:
+--   - total_point_limit NULL  : no cap on investment
+--   - total_point_limit set   : hard cap on total points ever invested
+--   - requires_80_pts = 1     : this specific category is locked or partially locked
+--                               until the player has invested 80 total hero points
+--   - pre_80_point_limit set  : how many points can be invested before the 80-point
+--                               threshold (only meaningful when requires_80_pts = 1)
+--   - pre_80_point_limit NULL : category is fully locked until 80 points (0 allowed before)
+-- Not every category has a limit, and the 80-point unlock applies only to specific
+-- categories on specific heroes — it must be documented individually.
+CREATE TABLE IF NOT EXISTS hero_investment_sets (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    hero_id             TEXT    NOT NULL,
+    set_number          INTEGER NOT NULL,      -- which ability set this investment belongs to
+    investment_name     TEXT    NOT NULL,      -- e.g. "Generate mana", "Monster health"
+    total_point_limit   INTEGER,               -- NULL = no cap; otherwise hard maximum
+    requires_80_pts     INTEGER NOT NULL DEFAULT 0,  -- 1 if 80-point threshold affects this category
+    pre_80_point_limit  INTEGER,               -- cap before 80 pts (NULL = fully locked until 80)
     description         TEXT,
-    investable_stat_1   TEXT,
-    investable_stat_2   TEXT,
-    investable_stat_3   TEXT,
-    bonus_80pt_effect   TEXT,
-    observable_sigs     TEXT,
-    research_status     TEXT    NOT NULL DEFAULT 'Not Started',
-    last_updated        TEXT
+    FOREIGN KEY (hero_id, set_number) REFERENCES hero_ability_sets(hero_id, set_number)
 );
 
 CREATE TABLE IF NOT EXISTS artifacts (
