@@ -48,8 +48,8 @@ def load_csv(filename: str) -> list[dict]:
 
 
 def clean(row: dict) -> dict:
-    """Strip whitespace and convert empty strings to None."""
-    return {k.strip(): (v.strip() if v and v.strip() else None) for k, v in row.items()}
+    """Strip whitespace and convert empty strings to None. Skip None keys (extra CSV columns)."""
+    return {k.strip(): (v.strip() if v and v.strip() else None) for k, v in row.items() if k is not None}
 
 
 def to_int(val) -> int | None:
