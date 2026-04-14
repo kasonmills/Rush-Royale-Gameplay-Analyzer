@@ -13,8 +13,16 @@ Board layout:
 Cell contents:
   A cell is None when empty, or a UnitCell when occupied.
   merge_rank ranges 1–7 (Treant caps at 4).
-  talent_tier is None when no talent is active, else 1–4.
-  talent_branch is 'L', 'R', 'Fixed', or None when unresolved.
+
+  Talents are cumulative — a unit at tier 3 also has tiers 1 and 2 active.
+  talent_path maps each active tier to its chosen branch (or None if the
+  branch hasn't been observed yet this match):
+    {}             → no talent equipped
+    {1: 'R'}       → T1 active, Right branch chosen
+    {1: 'R', 2: 'Fixed', 3: 'L'}  → T3 active, full path known
+    {1: None, 2: None, 3: 'L'}    → T3 badge seen; lower branches unresolved
+  Branches are 'L', 'R', or 'Fixed' (XOR per tier per unit — a tier is
+  either a branching choice OR fixed, never both).
 """
 
 from dataclasses import dataclass, field
@@ -26,12 +34,25 @@ class UnitCell:
     """Contents of a single board cell."""
     unit_id: str                          # matches units.unit_id in unit_meta.db
     merge_rank: int                       # 1–7
-    talent_tier: Optional[int] = None    # 1–4, or None
-    talent_branch: Optional[str] = None  # 'L', 'R', 'Fixed', or None
-    branch_confidence: float = 0.0       # 0.0–1.0
-    appearance_state: str = "base"       # 'base', 'max_level', 'reincarnation_1/2/3'
+    # Cumulative talent path: {tier: branch} for all active tiers.
+    # branch values: 'L', 'R', 'Fixed', or None (observed but not yet resolved).
+    talent_path: dict[int, Optional[str]] = field(default_factory=dict)
+    appearance_state: str = "base"        # 'base', 'max_level', 'reincarnation_1/2/3'
     variant_tag: Optional[str] = None    # e.g. 'moon'/'sun' for Twins
     recognition_confidence: float = 0.0  # template match or classifier score
+
+    @property
+    def highest_talent_tier(self) -> Optional[int]:
+        """The highest active talent tier, or None if no talents are equipped."""
+        return max(self.talent_path.keys()) if self.talent_path else None
+
+    @property
+    def branch_confidence(self) -> float:
+        """Fraction of active tiers whose branch is resolved (not None)."""
+        if not self.talent_path:
+            return 1.0
+        resolved = sum(1 for b in self.talent_path.values() if b is not None)
+        return resolved / len(self.talent_path)
 
 
 @dataclass
@@ -117,8 +138,8 @@ class GameState:
                     "cell": f"{row},{col}",
                     "unit_id": cell.unit_id,
                     "rank": cell.merge_rank,
-                    "talent_tier": cell.talent_tier,
-                    "talent_branch": cell.talent_branch,
+                    "talent_tier": cell.highest_talent_tier,
+                    "talent_path": cell.talent_path,
                     "variant": cell.variant_tag,
                     "confidence": round(cell.recognition_confidence, 3),
                 })
@@ -133,7 +154,7 @@ class GameState:
             "player_mana": self.player_mana,
             "player_board": serialize_board(self.player_board),
             "opponent_board": serialize_board(self.opponent_board),
-            "active_buffs": __import__("json").dumps(self.active_buffs),
+            "active_buffs": json.dumps(self.active_buffs),
             "win_probability": self.win_probability,
             "confidence": round(self.pipeline_confidence, 3),
         }
