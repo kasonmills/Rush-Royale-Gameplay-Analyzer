@@ -31,6 +31,11 @@ def _migrate(conn: sqlite3.Connection):
         # SQLite cannot DROP COLUMN on older versions; column is left in place but
         # never written to. It will be absent from any fresh database created from
         # the current DDL.
+        # spells: cooldown_sec and spell_type added.
+        ("spells", "spell_type",   "ALTER TABLE spells ADD COLUMN spell_type TEXT"),
+        ("spells", "cooldown_sec", "ALTER TABLE spells ADD COLUMN cooldown_sec INTEGER"),
+        # artifacts: cooldown_sec added for active artifacts (e.g. Recharging).
+        ("artifacts", "cooldown_sec", "ALTER TABLE artifacts ADD COLUMN cooldown_sec INTEGER"),
     ]
     for table, column, sql in migrations:
         if not _column_exists(conn, table, column):

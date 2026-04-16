@@ -162,6 +162,7 @@ class MatchRunner:
         self._source_path = source_path
         self._config      = config or MatchRunnerConfig()
         self._last_match_id: Optional[str] = None
+        self._stop_requested: bool = False
 
         # Recognition modules — populated by _setup_recognizers()
         self._matcher:   Optional[TemplateMatcher]  = None
@@ -319,6 +320,15 @@ class MatchRunner:
               f"in {result.duration_sec:.1f}s.")
         return result
 
+    def stop(self):
+        """
+        Request the running match to stop gracefully.
+
+        The current frame finishes processing; the loop then exits after
+        the next frame is yielded.  Safe to call from any thread.
+        """
+        self._stop_requested = True
+
     def set_outcome(self, outcome: str):
         """
         Record the match outcome after run() has returned.
@@ -442,7 +452,10 @@ class MatchRunner:
         cfg = self._config
 
         if isinstance(src, VideoCapture):
-            yield from src.frames(sample_every=cfg.sample_every_sec)
+            for frame, ts in src.frames(sample_every=cfg.sample_every_sec):
+                if self._stop_requested:
+                    return
+                yield frame, ts
             return
 
         # Live source — derive timestamps from wall clock.
@@ -450,6 +463,8 @@ class MatchRunner:
         # internally, so no extra sleep is needed here.
         start = time.monotonic()
         for frame in src.frames(target_fps=cfg.live_fps):
+            if self._stop_requested:
+                return
             yield frame, time.monotonic() - start
 
 

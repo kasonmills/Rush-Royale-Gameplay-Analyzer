@@ -16,6 +16,5 @@ lightgbm>=4.0.0
 # Screen capture
 mss>=9.0.0
 
-# UI (uncomment chosen approach at implementation time)
-# PyQt6>=6.5.0
-# flask>=3.0.0
+# UI
+PyQt6>=6.5.0

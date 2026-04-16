@@ -164,9 +164,10 @@ CREATE TABLE IF NOT EXISTS hero_investment_sets (
 CREATE TABLE IF NOT EXISTS artifacts (
     artifact_id         TEXT    PRIMARY KEY,
     display_name        TEXT    NOT NULL,
-    slot                TEXT,
+    slot                TEXT,               -- 'Artifact' (regular) or 'Special' (Relic-type; only 1 per deck)
     passive_effect      TEXT,
     active_effect       TEXT,
+    cooldown_sec        INTEGER,            -- only for active artifacts (e.g. Recharging)
     visual_signature    TEXT,
     research_status     TEXT    NOT NULL DEFAULT 'Not Started'
 );
@@ -174,8 +175,10 @@ CREATE TABLE IF NOT EXISTS artifacts (
 CREATE TABLE IF NOT EXISTS spells (
     spell_id            TEXT    PRIMARY KEY,
     display_name        TEXT    NOT NULL,
+    spell_type          TEXT,               -- 'Active', 'Passive'
     trigger_condition   TEXT,
     effect_description  TEXT,
+    cooldown_sec        INTEGER,            -- cooldown in seconds
     visual_signature    TEXT,
     research_status     TEXT    NOT NULL DEFAULT 'Not Started'
 );

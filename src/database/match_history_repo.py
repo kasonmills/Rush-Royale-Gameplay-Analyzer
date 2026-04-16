@@ -52,6 +52,36 @@ class MatchRepo:
             "SELECT * FROM matches WHERE outcome IS NOT NULL ORDER BY recorded_at"
         ).fetchall()
 
+    @staticmethod
+    def purge_empty(conn: sqlite3.Connection) -> int:
+        """
+        Delete matches that have zero rows in game_state_snapshots — i.e. the
+        pipeline started but never observed a single frame.  Also removes any
+        orphaned unit_performance rows for those matches.
+
+        Returns the number of matches deleted.
+        """
+        empty_ids = [
+            row[0] for row in conn.execute(
+                """SELECT match_id FROM matches
+                   WHERE match_id NOT IN (
+                       SELECT DISTINCT match_id FROM game_state_snapshots
+                   )"""
+            ).fetchall()
+        ]
+        if not empty_ids:
+            return 0
+        placeholders = ",".join("?" * len(empty_ids))
+        conn.execute(
+            f"DELETE FROM unit_performance WHERE match_id IN ({placeholders})",
+            empty_ids,
+        )
+        conn.execute(
+            f"DELETE FROM matches WHERE match_id IN ({placeholders})",
+            empty_ids,
+        )
+        return len(empty_ids)
+
 
 class SnapshotRepo:
 

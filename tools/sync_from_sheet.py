@@ -423,6 +423,7 @@ def sync_artifacts(conn):
             "slot":            r.get("Equip Slot"),
             "passive_effect":  r.get("Passive Effect Description"),
             "active_effect":   r.get("Active Effect Description"),
+            "cooldown_sec":    to_int(r.get("Cooldown (if active)")),
             "visual_signature":r.get("Passive Visual (what does it look like during match?)"),
             "research_status": r.get("Research Status") or "Not Started",
         })
@@ -443,8 +444,10 @@ def sync_spells(conn):
         records.append({
             "spell_id":           r.get("Spell ID"),
             "display_name":       r.get("Display Name"),
+            "spell_type":         r.get("Spell Type"),
             "trigger_condition":  r.get("Trigger Condition"),
             "effect_description": r.get("Full Effect Description"),
+            "cooldown_sec":       to_int(r.get("Cooldown / Uses per Match")),
             "visual_signature":   r.get("Visual on Cast (what does casting look like?)"),
             "research_status":    r.get("Research Status") or "Not Started",
         })
