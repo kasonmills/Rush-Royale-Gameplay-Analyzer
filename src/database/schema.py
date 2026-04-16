@@ -87,10 +87,11 @@ CREATE TABLE IF NOT EXISTS talent_trees (
 CREATE TABLE IF NOT EXISTS stat_numbers (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     unit_id             TEXT    NOT NULL REFERENCES units(unit_id),
+    talent_branch       TEXT,               -- NULL = base (no talent active); 'L', 'R', 'Fixed'
+    talent_tier         INTEGER,            -- NULL = applies to any tier of this branch; 1-4
     position            TEXT,               -- 'top_left', 'bottom_right', etc.
     meaning             TEXT,
-    display_color       TEXT,
-    scaling_formula     TEXT,
+    scaling_formula     TEXT,               -- JSON: {"type":"piecewise","segments":[{"from":0,"to":50,"weight":1.0},{"from":50,"to":200,"weight":0.3}]}
     research_status     TEXT    NOT NULL DEFAULT 'Not Started'
 );
 

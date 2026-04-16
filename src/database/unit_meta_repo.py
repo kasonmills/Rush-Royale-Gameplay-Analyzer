@@ -112,13 +112,16 @@ class StatNumberRepo:
 
     @staticmethod
     def upsert_many(conn: sqlite3.Connection, rows: list[dict]):
+        if not rows:
+            return
+        unit_ids = list({r["unit_id"] for r in rows if r.get("unit_id")})
+        if unit_ids:
+            placeholders = ",".join("?" * len(unit_ids))
+            conn.execute(f"DELETE FROM stat_numbers WHERE unit_id IN ({placeholders})", unit_ids)
         for data in rows:
             cols = ", ".join(data.keys())
-            placeholders = ", ".join("?" * len(data))
-            conn.execute(
-                f"INSERT INTO stat_numbers ({cols}) VALUES ({placeholders})",
-                list(data.values())
-            )
+            ph = ", ".join("?" * len(data))
+            conn.execute(f"INSERT INTO stat_numbers ({cols}) VALUES ({ph})", list(data.values()))
 
 
 # ---------------------------------------------------------------------------
@@ -143,13 +146,16 @@ class AnimationRepo:
 
     @staticmethod
     def upsert_many(conn: sqlite3.Connection, rows: list[dict]):
+        if not rows:
+            return
+        unit_ids = list({r["unit_id"] for r in rows if r.get("unit_id")})
+        if unit_ids:
+            placeholders = ",".join("?" * len(unit_ids))
+            conn.execute(f"DELETE FROM animations WHERE unit_id IN ({placeholders})", unit_ids)
         for data in rows:
             cols = ", ".join(data.keys())
-            placeholders = ", ".join("?" * len(data))
-            conn.execute(
-                f"INSERT INTO animations ({cols}) VALUES ({placeholders})",
-                list(data.values())
-            )
+            ph = ", ".join("?" * len(data))
+            conn.execute(f"INSERT INTO animations ({cols}) VALUES ({ph})", list(data.values()))
 
 
 # ---------------------------------------------------------------------------
@@ -167,17 +173,20 @@ class SynergyRepo:
 
     @staticmethod
     def upsert_many(conn: sqlite3.Connection, rows: list[dict]):
+        if not rows:
+            return
+        unit_a_ids = list({r["unit_a_id"] for r in rows if r.get("unit_a_id")})
+        if unit_a_ids:
+            placeholders = ",".join("?" * len(unit_a_ids))
+            conn.execute(f"DELETE FROM synergies WHERE unit_a_id IN ({placeholders})", unit_a_ids)
         for data in rows:
             cols = ", ".join(data.keys())
-            placeholders = ", ".join("?" * len(data))
-            conn.execute(
-                f"INSERT INTO synergies ({cols}) VALUES ({placeholders})",
-                list(data.values())
-            )
+            ph = ", ".join("?" * len(data))
+            conn.execute(f"INSERT INTO synergies ({cols}) VALUES ({ph})", list(data.values()))
 
 
 # ---------------------------------------------------------------------------
-# HeroRepo — heroes, hero_ability_sets, hero_investable_stats tables
+# HeroRepo — heroes, hero_ability_sets, hero_investment_sets tables
 # ---------------------------------------------------------------------------
 
 class HeroRepo:
@@ -195,7 +204,7 @@ class HeroRepo:
                              set_number: int) -> list[sqlite3.Row]:
         """Returns all investable stat categories for one ability set."""
         return conn.execute(
-            "SELECT * FROM hero_investable_stats WHERE hero_id = ? AND set_number = ?",
+            "SELECT * FROM hero_investment_sets WHERE hero_id = ? AND set_number = ?",
             (hero_id, set_number)
         ).fetchall()
 
@@ -283,13 +292,16 @@ class TierScoreRepo:
 
     @staticmethod
     def upsert_many(conn: sqlite3.Connection, rows: list[dict]):
+        if not rows:
+            return
+        entity_ids = list({r["entity_id"] for r in rows if r.get("entity_id")})
+        if entity_ids:
+            placeholders = ",".join("?" * len(entity_ids))
+            conn.execute(f"DELETE FROM tier_scores WHERE entity_id IN ({placeholders})", entity_ids)
         for data in rows:
             cols = ", ".join(data.keys())
-            placeholders = ", ".join("?" * len(data))
-            conn.execute(
-                f"INSERT INTO tier_scores ({cols}) VALUES ({placeholders})",
-                list(data.values())
-            )
+            ph = ", ".join("?" * len(data))
+            conn.execute(f"INSERT INTO tier_scores ({cols}) VALUES ({ph})", list(data.values()))
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +332,74 @@ class PatchLogRepo:
                 f"ON CONFLICT(patch_version) DO UPDATE SET "
                 f"release_date = excluded.release_date, "
                 f"units_changed = excluded.units_changed, "
+                f"heroes_changed = excluded.heroes_changed, "
+                f"new_content = excluded.new_content, "
                 f"notes = excluded.notes",
                 list(data.values())
             )
+
+
+# ---------------------------------------------------------------------------
+# ArtifactRepo — artifacts table
+# ---------------------------------------------------------------------------
+
+class ArtifactRepo:
+
+    @staticmethod
+    def get(conn: sqlite3.Connection, artifact_id: str) -> sqlite3.Row | None:
+        return conn.execute(
+            "SELECT * FROM artifacts WHERE artifact_id = ?", (artifact_id,)
+        ).fetchone()
+
+    @staticmethod
+    def get_all(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+        return conn.execute("SELECT * FROM artifacts ORDER BY display_name").fetchall()
+
+    @staticmethod
+    def upsert(conn: sqlite3.Connection, data: dict):
+        cols = ", ".join(data.keys())
+        placeholders = ", ".join("?" * len(data))
+        updates = ", ".join(f"{k} = excluded.{k}" for k in data if k != "artifact_id")
+        conn.execute(
+            f"INSERT INTO artifacts ({cols}) VALUES ({placeholders}) "
+            f"ON CONFLICT(artifact_id) DO UPDATE SET {updates}",
+            list(data.values())
+        )
+
+    @staticmethod
+    def upsert_many(conn: sqlite3.Connection, rows: list[dict]):
+        for row in rows:
+            ArtifactRepo.upsert(conn, row)
+
+
+# ---------------------------------------------------------------------------
+# SpellRepo — spells table
+# ---------------------------------------------------------------------------
+
+class SpellRepo:
+
+    @staticmethod
+    def get(conn: sqlite3.Connection, spell_id: str) -> sqlite3.Row | None:
+        return conn.execute(
+            "SELECT * FROM spells WHERE spell_id = ?", (spell_id,)
+        ).fetchone()
+
+    @staticmethod
+    def get_all(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+        return conn.execute("SELECT * FROM spells ORDER BY display_name").fetchall()
+
+    @staticmethod
+    def upsert(conn: sqlite3.Connection, data: dict):
+        cols = ", ".join(data.keys())
+        placeholders = ", ".join("?" * len(data))
+        updates = ", ".join(f"{k} = excluded.{k}" for k in data if k != "spell_id")
+        conn.execute(
+            f"INSERT INTO spells ({cols}) VALUES ({placeholders}) "
+            f"ON CONFLICT(spell_id) DO UPDATE SET {updates}",
+            list(data.values())
+        )
+
+    @staticmethod
+    def upsert_many(conn: sqlite3.Connection, rows: list[dict]):
+        for row in rows:
+            SpellRepo.upsert(conn, row)

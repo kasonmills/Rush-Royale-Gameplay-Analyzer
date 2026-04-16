@@ -1,0 +1,24 @@
+MERGE MECHANICS REFERENCE
+Quick reference for the merge system — use when documenting unit behaviors and board state logic
+
+CORE RULE
+Two units of the SAME TYPE and the SAME MERGE RANK can be merged together.
+The result is ONE RANDOM UNIT from the player's 5-card deck at RANK +1.
+The player does NOT choose which unit comes out of a merge — it is random within the deck.
+
+NOTABLE EXCEPTIONS
+"Some units, heroes, spells, or artifacts can produce non-standard merge results."
+Document any exceptions in the relevant unit / spell / artifact sheet.
+
+BOARD OPENING MECHANICS (other than merging)
+"• Hero abilities — some heroes can remove or relocate units, opening board slots"
+• Specific unit abilities — e.g. Portal Keeper can move units between cells
+"• Spells — some spells may open slots, duplicate units, or manipulate board layout"
+• Artifacts — some artifacts may have passive or active board effects
+"• Trainer dummies — occupy slots temporarily, then expire and clear the slot"
+
+IMPLICATIONS FOR ANALYSIS
+• A unit appearing in a cell is NOT necessarily a newly summoned unit — it may be a merge output or a relocated unit
+• The board distribution at any moment is shaped by merge luck as well as deck choice
+• Merge rank + wave number must be evaluated together (high rank early = efficient play)
+• The vision system must track unit identity across frames by position to detect movement vs. new summons
