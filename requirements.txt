@@ -12,6 +12,7 @@ pytesseract>=0.3.10
 # ML
 ultralytics>=8.0.0
 lightgbm>=4.0.0
+scipy>=1.11.0
 
 # Screen capture
 mss>=9.0.0

@@ -53,6 +53,7 @@ def init_all():
         conn.commit()
         conn.close()
         print(f"Initialized {db_path}")
+    # summon_analysis.db uses its own DDL key; no migrations needed yet.
 
 
 if __name__ == "__main__":

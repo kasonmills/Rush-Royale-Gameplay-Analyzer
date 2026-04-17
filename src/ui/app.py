@@ -193,7 +193,7 @@ class UnitCardWidget(QFrame):
     """
 
     _CARD_W = 72
-    _CARD_H = 88
+    _CARD_H = 104
     _CONF_THRESHOLD = 0.70
 
     def __init__(self, parent=None):
@@ -206,6 +206,13 @@ class UnitCardWidget(QFrame):
         root = QVBoxLayout(self)
         root.setContentsMargins(4, 4, 4, 4)
         root.setSpacing(2)
+
+        # Summon percentage label — sits above the icon
+        self._pct_lbl = QLabel("—")
+        self._pct_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._pct_lbl.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        self._pct_lbl.setStyleSheet("color: #666; border: none;")
+        root.addWidget(self._pct_lbl)
 
         # Icon placeholder (coloured square with initials)
         self._icon = QLabel()
@@ -276,7 +283,42 @@ class UnitCardWidget(QFrame):
         )
         self.show()
 
+    def set_pct(self, observed: int, total: int, expected_rate: float):
+        """
+        Update the summon-frequency percentage label above the icon.
+
+        Colour coding vs expected rate:
+          green  — observed > expected * 1.15  (summoning more than expected)
+          red    — observed < expected * 0.85  (summoning less than expected)
+          white  — within ±15% of expected
+          grey   — no data (total == 0)
+        """
+        if total == 0:
+            self._pct_lbl.setText("—")
+            self._pct_lbl.setStyleSheet("color: #666; border: none;")
+            return
+
+        obs_rate = observed / total
+        pct_text = f"{obs_rate:.0%}"
+        if obs_rate > expected_rate * 1.15:
+            color = "#5dba7d"   # green — above expected
+        elif obs_rate < expected_rate * 0.85:
+            color = "#ba5d5d"   # red — below expected
+        else:
+            color = _TEXT       # white — roughly on target
+        self._pct_lbl.setText(pct_text)
+        self._pct_lbl.setStyleSheet(f"color: {color}; border: none;")
+        self._pct_lbl.setToolTip(
+            f"Summons: {observed}/{total}  ({obs_rate:.1%} observed vs "
+            f"{expected_rate:.1%} expected)"
+        )
+
+    def clear_pct(self):
+        self._pct_lbl.setText("—")
+        self._pct_lbl.setStyleSheet("color: #666; border: none;")
+
     def clear(self):
+        self.clear_pct()
         self.hide()
 
 
@@ -308,7 +350,7 @@ class UnitRosterWidget(QGroupBox):
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setFixedHeight(UnitCardWidget._CARD_H + 16)
+        scroll.setFixedHeight(UnitCardWidget._CARD_H + 18)
         scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
         inner = QWidget()
@@ -332,13 +374,26 @@ class UnitRosterWidget(QGroupBox):
         name = (self._unit_names.get(hero_id, hero_id) if hero_id else "—")
         self._hero_lbl.setText(f"Hero: {name}")
 
-    def update_roster(self, board: "BoardState"):
+    def update_roster(self, board: "BoardState",
+                      summon_counts: Optional[dict] = None):
         units = board.occupied()          # list of (row, col, UnitCell)
+        total = sum(summon_counts.values()) if summon_counts else 0
+        deck_size = len(summon_counts) if summon_counts else 0
+        expected_rate = 1.0 / deck_size if deck_size > 0 else 0.0
+
         for i, card in enumerate(self._cards):
             if i < len(units):
                 _, _, uc = units[i]
                 name = self._unit_names.get(uc.unit_id, uc.unit_id)
                 card.set_unit(name, uc)
+                if summon_counts is not None and total > 0:
+                    card.set_pct(
+                        summon_counts.get(uc.unit_id, 0),
+                        total,
+                        expected_rate,
+                    )
+                else:
+                    card.clear_pct()
             else:
                 card.clear()
 
@@ -513,8 +568,16 @@ class MainWindow(QMainWindow):
         self._thread:     Optional[QThread]     = None
         self._last_result: Optional[MatchResult] = None
 
+        # Live summon tracking (UI-side, for the percentage labels)
+        from src.analysis.game_state import BoardState as _BS
+        self._player_prev_board: Optional[_BS] = None
+        self._opp_prev_board:    Optional[_BS] = None
+        self._player_summon_counts: dict[str, int] = {}
+        self._opp_summon_counts:    dict[str, int] = {}
+
         self._build_ui()
         self._refresh_history()
+        self._show_placeholder_state()
 
         # Refresh history periodically while idle
         self._hist_timer = QTimer(self)
@@ -535,8 +598,9 @@ class MainWindow(QMainWindow):
 
         self._tabs = QTabWidget()
         self._tabs.setDocumentMode(True)
-        self._tabs.addTab(self._build_analyzer_tab(), "🎮  Analyzer")
-        self._tabs.addTab(self._build_history_tab(),  "📋  Match History")
+        self._tabs.addTab(self._build_analyzer_tab(),  "🎮  Analyzer")
+        self._tabs.addTab(self._build_history_tab(),   "📋  Match History")
+        self._tabs.addTab(self._build_summon_tab(),    "🎲  Summon Stats")
         root.addWidget(self._tabs)
 
         self._status_bar = QStatusBar()
@@ -722,6 +786,7 @@ class MainWindow(QMainWindow):
             QTableWidget.EditTrigger.NoEditTriggers
         )
         self._hist_table.setAlternatingRowColors(True)
+        self._hist_table.itemSelectionChanged.connect(self._on_history_selected)
         layout.addWidget(self._hist_table)
 
         btn_row = QHBoxLayout()
@@ -736,6 +801,101 @@ class MainWindow(QMainWindow):
         btn_row.addWidget(self._win_btn)
         btn_row.addWidget(self._loss_btn)
         layout.addLayout(btn_row)
+
+        # Summon breakdown panel — shown when a row is selected
+        self._hist_detail_box = QGroupBox("Summon Breakdown")
+        detail_layout = QVBoxLayout(self._hist_detail_box)
+        self._hist_detail_table = QTableWidget(0, 4)
+        self._hist_detail_table.setHorizontalHeaderLabels(
+            ["Unit", "Summons", "Rate", "vs Expected"]
+        )
+        dh = self._hist_detail_table.horizontalHeader()
+        dh.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self._hist_detail_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._hist_detail_table.setAlternatingRowColors(True)
+        self._hist_detail_table.setMaximumHeight(160)
+        detail_layout.addWidget(self._hist_detail_table)
+        self._hist_detail_box.setVisible(False)
+        layout.addWidget(self._hist_detail_box)
+
+        return tab
+
+    def _build_summon_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setSpacing(6)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        # ---- Controls row ----
+        ctrl = QHBoxLayout()
+        ctrl.addWidget(QLabel("Context:"))
+        self._summon_ctx_group = QButtonGroup(self)
+        for label, value in [("All", "all"), ("Manual only", "manual"),
+                              ("Post-merge only", "post_merge")]:
+            rb = QRadioButton(label)
+            rb.setProperty("ctx_value", value)
+            if value == "all":
+                rb.setChecked(True)
+            self._summon_ctx_group.addButton(rb)
+            ctrl.addWidget(rb)
+        ctrl.addStretch()
+        self._summon_refresh_btn = QPushButton("↻  Refresh")
+        self._summon_refresh_btn.setFixedWidth(110)
+        self._summon_refresh_btn.clicked.connect(self._refresh_summon_stats)
+        ctrl.addWidget(self._summon_refresh_btn)
+        layout.addLayout(ctrl)
+
+        # ---- Verdict banner ----
+        self._summon_verdict = QLabel("No data yet")
+        self._summon_verdict.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._summon_verdict.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        self._summon_verdict.setStyleSheet(
+            "color: #aaa; border: 1px solid #444; border-radius: 4px; padding: 6px;"
+        )
+        layout.addWidget(self._summon_verdict)
+
+        # ---- Chi-squared summary ----
+        self._chi_lbl = QLabel("")
+        self._chi_lbl.setStyleSheet("color: #888; font-size: 9px;")
+        self._chi_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self._chi_lbl)
+
+        # ---- Per-unit stats table ----
+        unit_box = QGroupBox("Per-Unit Summon Distribution")
+        unit_layout = QVBoxLayout(unit_box)
+        self._summon_unit_table = QTableWidget(0, 8)
+        self._summon_unit_table.setHorizontalHeaderLabels([
+            "Unit", "Observed", "Expected", "Obs %", "Exp %",
+            "Z-score", "p-value", "95% CI",
+        ])
+        hh = self._summon_unit_table.horizontalHeader()
+        hh.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self._summon_unit_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._summon_unit_table.setAlternatingRowColors(True)
+        self._summon_unit_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        unit_layout.addWidget(self._summon_unit_table)
+        layout.addWidget(unit_box)
+
+        # ---- Merge breakdown table ----
+        merge_box = QGroupBox("Merge Event Breakdown")
+        merge_layout = QVBoxLayout(merge_box)
+        note = QLabel(
+            "Tracks every detected merge. Used to verify whether post-merge "
+            "summon pools follow the same distribution as manual summons."
+        )
+        note.setStyleSheet("color: #777; font-size: 9px;")
+        note.setWordWrap(True)
+        merge_layout.addWidget(note)
+        self._summon_merge_table = QTableWidget(0, 4)
+        self._summon_merge_table.setHorizontalHeaderLabels(
+            ["Unit", "From Rank", "To Rank", "Count"]
+        )
+        mh = self._summon_merge_table.horizontalHeader()
+        mh.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self._summon_merge_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._summon_merge_table.setAlternatingRowColors(True)
+        merge_layout.addWidget(self._summon_merge_table)
+        layout.addWidget(merge_box)
 
         return tab
 
@@ -798,7 +958,16 @@ class MainWindow(QMainWindow):
         self._opp_board.clear_all()
         self._player_roster.clear_roster()
         self._opp_roster.clear_roster()
+        self._player_summon_counts = {}
+        self._opp_summon_counts    = {}
+        self._player_prev_board    = None
+        self._opp_prev_board       = None
         self._update_prob_bar(0.5)
+        # Clear HUD placeholders
+        for lbl in (self._wave_lbl, self._php_lbl, self._ohp_lbl,
+                    self._mana_lbl, self._conf_lbl, self._frame_lbl):
+            lbl.setText(lbl.text().split(":")[0] + ": —")
+        self._hist_detail_box.setVisible(False)
         self._set_status("Running…  (no sprites = board shows unit IDs; recognition stubs active)")
 
     def _stop_analysis(self):
@@ -812,12 +981,26 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_state(self, state: GameState):
+        from src.analysis.match_runner import _detect_summons
+
+        # Update live summon counts for both sides
+        if self._player_prev_board is not None:
+            for uid in _detect_summons(self._player_prev_board, state.player_board):
+                self._player_summon_counts[uid] = \
+                    self._player_summon_counts.get(uid, 0) + 1
+        if self._opp_prev_board is not None:
+            for uid in _detect_summons(self._opp_prev_board, state.opponent_board):
+                self._opp_summon_counts[uid] = \
+                    self._opp_summon_counts.get(uid, 0) + 1
+        self._player_prev_board = state.player_board
+        self._opp_prev_board    = state.opponent_board
+
         self._player_board.update_board(state.player_board)
         self._opp_board.update_board(state.opponent_board)
         self._player_roster.update_hero(state.player_hero_id)
         self._opp_roster.update_hero(state.opponent_hero_id)
-        self._player_roster.update_roster(state.player_board)
-        self._opp_roster.update_roster(state.opponent_board)
+        self._player_roster.update_roster(state.player_board, self._player_summon_counts)
+        self._opp_roster.update_roster(state.opponent_board, self._opp_summon_counts)
 
         self._wave_lbl.setText(f"Wave: {state.wave_number or '—'}")
         self._php_lbl.setText(f"Player HP: {state.player_hp if state.player_hp is not None else '—'}")
@@ -837,6 +1020,18 @@ class MainWindow(QMainWindow):
         self._start_btn.setEnabled(True)
         self._stop_btn.setEnabled(False)
 
+        _END_REASON_LABELS = {
+            "video_ended":       "Video finished.",
+            "user_stopped":      "Stopped by user.",
+            "idle_empty_board":  "Auto-stopped — board was empty for 12 s "
+                                 "(results/lobby screen detected).",
+            "idle_no_activity":  "Auto-stopped — no board changes, hero abilities, "
+                                 "wave progress, or HP changes for 60 s "
+                                 "(match appears to have ended).",
+            "match_end_hp":      "Auto-stopped — a player's HP reached 0.",
+        }
+        reason_text = _END_REASON_LABELS.get(result.end_reason, result.end_reason)
+
         if result.total_snapshots_written == 0:
             # Nothing was observed — delete the ghost match record immediately
             _purge_empty_matches()
@@ -844,14 +1039,15 @@ class MainWindow(QMainWindow):
             self._win_btn.setEnabled(False)
             self._loss_btn.setEnabled(False)
             self._set_status(
-                "Session ended — no frames were captured, so no match was recorded."
+                f"Session ended — no frames captured, match not recorded.  "
+                f"({reason_text})"
             )
         else:
             self._win_btn.setEnabled(True)
             self._loss_btn.setEnabled(True)
             self._set_status(
-                f"Match complete — {result.total_frames_processed} frames in "
-                f"{result.duration_sec:.1f}s.  Tag the outcome below."
+                f"Match complete — {result.total_frames_processed} frames, "
+                f"{result.duration_sec:.1f}s.  {reason_text}  Tag the outcome below."
             )
         self._refresh_history()
 
@@ -883,6 +1079,96 @@ class MainWindow(QMainWindow):
     # Match history table
     # ------------------------------------------------------------------
 
+    def _refresh_summon_stats(self):
+        try:
+            from src.database.connection import _DB_PATHS
+            from src.analysis.summon_analyzer import SummonAnalyzer
+            import sqlite3 as _sq
+
+            db_path = Path(_DB_PATHS["summon_analysis"])
+            if not db_path.exists():
+                self._summon_verdict.setText("Database not initialised yet — run a match first.")
+                return
+
+            # Determine selected context
+            selected = next(
+                (b for b in self._summon_ctx_group.buttons() if b.isChecked()), None
+            )
+            ctx = selected.property("ctx_value") if selected else "all"
+
+            conn = _sq.connect(db_path)
+            conn.row_factory = _sq.Row
+            result = SummonAnalyzer.analyse(conn, trigger_type=ctx,
+                                            unit_names=self._unit_names)
+            conn.close()
+
+            # Verdict banner colour
+            if "Bias" in result.verdict:
+                color = "#ba5d5d"
+            elif "Suspicious" in result.verdict:
+                color = "#d4a017"
+            elif "Fair" in result.verdict:
+                color = "#5dba7d"
+            else:
+                color = "#aaa"
+            self._summon_verdict.setText(
+                f"{result.verdict}  —  {result.verdict_detail}"
+            )
+            self._summon_verdict.setStyleSheet(
+                f"color: {color}; border: 1px solid #444; "
+                "border-radius: 4px; padding: 6px; font-weight: bold; font-size: 10px;"
+            )
+
+            # Chi-squared line
+            if result.total_summons > 0:
+                self._chi_lbl.setText(
+                    f"χ²({result.chi_sq_df}) = {result.chi_sq_statistic}  |  "
+                    f"p = {result.chi_sq_p_value}  |  "
+                    f"n = {result.total_summons} summons  |  "
+                    f"deck size = {result.deck_size}  "
+                    + ("" if result.reliable else
+                       f"  ⚠ need ≥ {result.MIN_RELIABLE} for reliable results")
+                )
+            else:
+                self._chi_lbl.setText("")
+
+            # Per-unit table
+            t = self._summon_unit_table
+            t.setRowCount(len(result.unit_stats))
+            for i, us in enumerate(result.unit_stats):
+                ci_text = f"{us.ci_low:.1%} – {us.ci_high:.1%}"
+                vals = [
+                    us.display_name,
+                    str(us.observed),
+                    f"{us.expected:.1f}",
+                    f"{us.observed_rate:.1%}",
+                    f"{us.expected_rate:.1%}",
+                    f"{us.z_score:+.2f}",
+                    f"{us.p_value:.4f}",
+                    ci_text,
+                ]
+                for j, v in enumerate(vals):
+                    item = QTableWidgetItem(v)
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    if us.flagged:
+                        item.setForeground(QColor("#d4a017"))
+                    t.setItem(i, j, item)
+
+            # Merge table
+            m = self._summon_merge_table
+            m.setRowCount(len(result.merge_stats))
+            for i, ms in enumerate(result.merge_stats):
+                for j, v in enumerate([
+                    ms.display_name, str(ms.from_rank),
+                    str(ms.to_rank), str(ms.count)
+                ]):
+                    item = QTableWidgetItem(v)
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    m.setItem(i, j, item)
+
+        except Exception as exc:
+            self._summon_verdict.setText(f"Error loading stats: {exc}")
+
     def _refresh_history(self):
         _purge_empty_matches()
         rows = _load_recent_matches()
@@ -903,7 +1189,96 @@ class MainWindow(QMainWindow):
                     item.setForeground(QColor("#5dba7d"))
                 elif j == 5 and val == "loss":
                     item.setForeground(QColor("#ba5d5d"))
+                # Store full match_id on column 0 for selection lookup
+                if j == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, str(row["match_id"]))
                 self._hist_table.setItem(i, j, item)
+
+        self._hist_detail_box.setVisible(False)
+
+    def _on_history_selected(self):
+        """Populate the summon breakdown panel for whichever match row is selected."""
+        selected = self._hist_table.selectedItems()
+        if not selected:
+            self._hist_detail_box.setVisible(False)
+            return
+
+        row_idx = self._hist_table.currentRow()
+        id_item = self._hist_table.item(row_idx, 0)
+        if id_item is None:
+            self._hist_detail_box.setVisible(False)
+            return
+
+        match_id = id_item.data(Qt.ItemDataRole.UserRole)
+        if not match_id:
+            self._hist_detail_box.setVisible(False)
+            return
+
+        try:
+            from src.database.connection import _DB_PATHS
+            import sqlite3 as _sq
+            db_path = Path(_DB_PATHS["summon_analysis"])
+            if not db_path.exists():
+                self._hist_detail_box.setVisible(False)
+                return
+
+            conn = _sq.connect(db_path)
+            conn.row_factory = _sq.Row
+
+            # Get deck composition for expected rate
+            session = conn.execute(
+                "SELECT deck_json, total_summons FROM summon_sessions WHERE match_id = ?",
+                (match_id,)
+            ).fetchone()
+
+            if session is None or not session["deck_json"]:
+                self._hist_detail_box.setVisible(False)
+                conn.close()
+                return
+
+            import json as _json
+            deck = _json.loads(session["deck_json"])
+            total = session["total_summons"]
+            deck_size = len(deck)
+            expected_rate = 1.0 / deck_size if deck_size > 0 else 0.0
+
+            counts = {r["unit_summoned"]: r["count"] for r in conn.execute(
+                """SELECT unit_summoned, COUNT(*) AS count
+                   FROM summon_events WHERE match_id = ?
+                   GROUP BY unit_summoned""",
+                (match_id,)
+            ).fetchall()}
+            conn.close()
+
+            t = self._hist_detail_table
+            t.setRowCount(len(deck))
+            for i, uid in enumerate(sorted(deck)):
+                name = self._unit_names.get(uid, uid)
+                obs  = counts.get(uid, 0)
+                rate = obs / total if total > 0 else 0.0
+                dev  = rate - expected_rate
+                dev_text = f"{dev:+.1%}"
+                if dev > expected_rate * 0.15:
+                    dev_color = QColor("#5dba7d")
+                elif dev < -expected_rate * 0.15:
+                    dev_color = QColor("#ba5d5d")
+                else:
+                    dev_color = QColor(_TEXT)
+
+                for j, val in enumerate([name, str(obs), f"{rate:.1%}", dev_text]):
+                    item = QTableWidgetItem(val)
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    if j == 3:
+                        item.setForeground(dev_color)
+                    t.setItem(i, j, item)
+
+            self._hist_detail_box.setTitle(
+                f"Summon Breakdown — {total} summons across {deck_size}-unit deck"
+            )
+            self._hist_detail_box.setVisible(True)
+
+        except Exception:
+            self._hist_detail_box.setVisible(False)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -943,6 +1318,172 @@ class MainWindow(QMainWindow):
 
     def _set_status(self, message: str):
         self._status_bar.showMessage(message)
+
+    # ------------------------------------------------------------------
+    # Placeholder / preview state
+    # ------------------------------------------------------------------
+
+    def _show_placeholder_state(self):
+        """
+        Pre-fill every new UI area with clearly-labelled preview data so the
+        layout is visible before any match is recorded.
+        Wiped automatically when a real match starts.
+        """
+        from src.analysis.game_state import UnitCell, BoardState
+
+        # ── Placeholder unit definitions ──────────────────────────────
+        _player_defs = [
+            ("archer",       "Archer",       3, {1: "R"},          0.95),
+            ("crystal_mage", "Crystal Mage", 2, {1: "L"},          0.88),
+            ("engineer",     "Engineer",     4, {1: "R", 2: "Fixed"}, 0.92),
+            ("frost",        "Frost",        1, {},                 0.75),
+            ("treant",       "Treant",       2, {},                 0.60),
+        ]
+        _opp_defs = [
+            ("dark_star", "Dark Star", 3, {1: "L"},   0.90),
+            ("bomber",    "Bomber",    2, {},          0.85),
+            ("dryad",     "Dryad",     3, {1: "R"},   0.91),
+            ("keeper",    "Keeper",    1, {},          0.70),
+            ("poisoner",  "Poisoner",  2, {1: "L"},   0.82),
+        ]
+
+        # Add placeholder names to the shared unit_names dict so rosters
+        # render them (dict is shared by reference with UnitRosterWidget)
+        for uid, name, *_ in _player_defs + _opp_defs:
+            self._unit_names.setdefault(uid, name)
+
+        # ── Build fake board states ───────────────────────────────────
+        def _make_board(defs):
+            board = BoardState()
+            for i, (uid, _, rank, talents, conf) in enumerate(defs):
+                r, c = divmod(i, 3)
+                board.set(r, c, UnitCell(
+                    unit_id=uid, merge_rank=rank,
+                    talent_path=talents, recognition_confidence=conf,
+                ))
+            return board
+
+        player_board = _make_board(_player_defs)
+        opp_board    = _make_board(_opp_defs)
+
+        # ── Fake summon counts (slight variance from expected 20 %) ───
+        player_counts = {
+            "archer": 28, "crystal_mage": 17, "engineer": 22,
+            "frost": 19, "treant": 14,
+        }
+        opp_counts = {
+            "dark_star": 21, "bomber": 30, "dryad": 16,
+            "keeper": 20, "poisoner": 13,
+        }
+
+        # ── Composition panel ─────────────────────────────────────────
+        self._player_roster.update_hero("Paladin  [PREVIEW]")
+        self._opp_roster.update_hero("Monk  [PREVIEW]")
+        self._player_roster.update_roster(player_board, player_counts)
+        self._opp_roster.update_roster(opp_board, opp_counts)
+
+        # ── HUD ───────────────────────────────────────────────────────
+        self._wave_lbl.setText("Wave: 12")
+        self._php_lbl.setText("Player HP: 3")
+        self._ohp_lbl.setText("Opp HP: 2")
+        self._mana_lbl.setText("Mana: 180")
+        self._conf_lbl.setText("Confidence: —")
+        self._frame_lbl.setText("Frames: —")
+        self._update_prob_bar(0.63)
+
+        # ── Match History: one fake row + breakdown ───────────────────
+        self._hist_table.setRowCount(1)
+        for j, val in enumerate(
+            ["abcd1234…", "2026-04-17 10:30", "live_capture",
+             "Paladin", "15", "win"]
+        ):
+            item = QTableWidgetItem(val)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            if j == 5:
+                item.setForeground(QColor("#5dba7d"))
+            if j == 0:
+                item.setData(Qt.ItemDataRole.UserRole, "")  # no real match_id
+            self._hist_table.setItem(0, j, item)
+
+        total_s = sum(player_counts.values())
+        exp_r   = 1.0 / len(player_counts)
+        self._hist_detail_table.setRowCount(len(_player_defs))
+        for i, (uid, name, *_) in enumerate(_player_defs):
+            obs  = player_counts[uid]
+            rate = obs / total_s
+            dev  = rate - exp_r
+            dtext = f"{dev:+.1%}"
+            if dev > exp_r * 0.15:
+                dcol = QColor("#5dba7d")
+            elif dev < -exp_r * 0.15:
+                dcol = QColor("#ba5d5d")
+            else:
+                dcol = QColor(_TEXT)
+            for j, v in enumerate([name, str(obs), f"{rate:.1%}", dtext]):
+                item = QTableWidgetItem(v)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                if j == 3:
+                    item.setForeground(dcol)
+                self._hist_detail_table.setItem(i, j, item)
+        self._hist_detail_box.setTitle(
+            f"Summon Breakdown — {total_s} summons, 5-unit deck  [PREVIEW DATA]"
+        )
+        self._hist_detail_box.setVisible(True)
+
+        # ── Summon Stats tab ──────────────────────────────────────────
+        self._summon_verdict.setText(
+            "Consistent with Fair Randomness  —  p = 0.3812 — no statistically "
+            "significant deviation from 20% per unit.  [PREVIEW DATA]"
+        )
+        self._summon_verdict.setStyleSheet(
+            "color: #5dba7d; border: 1px solid #444; border-radius: 4px; "
+            "padding: 6px; font-weight: bold; font-size: 10px;"
+        )
+        self._chi_lbl.setText(
+            "χ²(4) = 4.700  |  p = 0.3812  |  n = 100 summons  |  deck size = 5"
+        )
+        preview_units = [
+            ("Archer",       28, 20.0, 0.28, 0.20, +1.43, 0.1527),
+            ("Crystal Mage", 17, 20.0, 0.17, 0.20, -1.07, 0.2843),
+            ("Engineer",     22, 20.0, 0.22, 0.20, +0.71, 0.4761),
+            ("Frost",        19, 20.0, 0.19, 0.20, -0.36, 0.7212),
+            ("Treant",       14, 20.0, 0.14, 0.20, -2.14, 0.0328),
+        ]
+        self._summon_unit_table.setRowCount(len(preview_units))
+        for i, (name, obs, exp, obs_r, exp_r2, z, p) in enumerate(preview_units):
+            ci_lo = max(0.0, obs_r - 1.96 * (obs_r * (1 - obs_r) / 100) ** 0.5)
+            ci_hi = min(1.0, obs_r + 1.96 * (obs_r * (1 - obs_r) / 100) ** 0.5)
+            flagged = p < 0.05
+            vals = [
+                name, str(obs), f"{exp:.1f}",
+                f"{obs_r:.0%}", f"{exp_r2:.0%}",
+                f"{z:+.2f}", f"{p:.4f}",
+                f"{ci_lo:.1%} – {ci_hi:.1%}",
+            ]
+            for j, v in enumerate(vals):
+                item = QTableWidgetItem(v)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                if flagged:
+                    item.setForeground(QColor("#d4a017"))
+                self._summon_unit_table.setItem(i, j, item)
+
+        preview_merges = [
+            ("Archer",       2, 3, 12),
+            ("Crystal Mage", 1, 2,  8),
+            ("Engineer",     3, 4,  6),
+            ("Frost",        1, 2,  9),
+            ("Treant",       1, 2,  5),
+        ]
+        self._summon_merge_table.setRowCount(len(preview_merges))
+        for i, (name, fr, tr, cnt) in enumerate(preview_merges):
+            for j, v in enumerate([name, str(fr), str(tr), str(cnt)]):
+                item = QTableWidgetItem(v)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self._summon_merge_table.setItem(i, j, item)
+
+        self._set_status(
+            "PREVIEW — placeholder data shown. Start a match to replace with live data."
+        )
 
 
 # ---------------------------------------------------------------------------

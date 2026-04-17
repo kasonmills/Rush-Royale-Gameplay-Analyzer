@@ -77,9 +77,9 @@ _SENSITIVITY = 3.0
 # in [0, _MAX_SCORE].  Adjust if the actual data uses a different scale.
 _MAX_SCORE = 10.0
 
-# HP at which we consider a player to be in serious danger.
-# Rush Royale castle HP is 0–100.
-_MAX_HP = 100
+# Each player starts with 3 lives in Rush Royale PvP.
+# HP values observed by OCR are in the range 0–3.
+_MAX_HP = 3
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +311,7 @@ class WinPredictor:
         if state.player_hp is None or state.opponent_hp is None:
             return 0.0
 
-        return (state.opponent_hp - state.player_hp) / _MAX_HP
+        return (state.player_hp - state.opponent_hp) / _MAX_HP
 
 
 # ---------------------------------------------------------------------------

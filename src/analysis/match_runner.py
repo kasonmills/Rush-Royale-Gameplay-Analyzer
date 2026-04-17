@@ -44,13 +44,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator, Optional
 
-from src.analysis.game_state import GameState
+from src.analysis.game_state import GameState, BoardState
 from src.analysis.match_context_resolver import MatchContextResolver, MatchSession
 from src.analysis.win_predictor import WinPredictor
 from src.capture.grid_calibrator import GridCalibrator
 from src.capture.screen_capture import ScrcpyCapture, WindowCapture
 from src.capture.video_capture import VideoCapture
 from src.database.match_history_repo import MatchRepo, SnapshotRepo, UnitPerformanceRepo
+from src.database.summon_repo import SummonRepo
 from src.recognition.hero_classifier import HeroClassifier
 from src.recognition.ocr_reader import OCRReader
 from src.recognition.talent_classifier import TalentClassifier
@@ -62,6 +63,119 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # Snapshot confidence below which the frame is not written to the DB.
 # The MCR still processes it — this only gates DB persistence.
 _MIN_PERSIST_CONFIDENCE = 0.40
+
+# A rank-1 unit appearing within this many seconds of a detected merge on
+# the player's board is classified as 'post_merge' rather than 'manual'.
+_POST_MERGE_WINDOW_SEC = 2.5
+
+
+# ---------------------------------------------------------------------------
+# Board fingerprinting
+# ---------------------------------------------------------------------------
+
+def _board_fingerprint(board: BoardState) -> frozenset:
+    """
+    Return a hashable representation of the board's occupied cells.
+    Changes when any unit is summoned, merged, or its rank/id changes.
+    """
+    return frozenset(
+        (r, c, cell.unit_id, cell.merge_rank)
+        for r, c, cell in board.occupied()
+    )
+
+
+# ---------------------------------------------------------------------------
+# ActivityMonitor — idle / match-end detection
+# ---------------------------------------------------------------------------
+
+class ActivityMonitor:
+    """
+    Detects when a match has ended even though the source is still running.
+
+    Two independent checks fire a soft end signal:
+
+    1. Empty-board check — board has had zero occupied cells for
+       `empty_board_sec` continuous seconds.  Fires quickly because the
+       results / lobby screen empties the board immediately.
+
+    2. Dual no-activity check — BOTH of the following are true for
+       `no_activity_sec` continuous seconds:
+         a) Board fingerprint has not changed (no summons, merges, or
+            rank changes on the player's side).
+         b) No other game signal changed: wave number, either player's HP,
+            or active_buffs (hero ability / power-up animations).
+       This handles the "walked away, game frozen on mid-match screen" case.
+       Requiring BOTH channels to be silent avoids false positives during
+       long defensive stalls where the board truly doesn't change but the
+       player is still actively using abilities.
+
+    A third check fires immediately on HP-zero (once OCR is reliable).
+    """
+
+    def __init__(self, empty_board_sec: float, no_activity_sec: float):
+        self._empty_sec      = empty_board_sec
+        self._no_act_sec     = no_activity_sec
+
+        # Empty-board timing
+        self._empty_since:   Optional[float] = None
+
+        # Dual activity tracking
+        self._last_fp:       Optional[frozenset] = None
+        self._last_wave:     Optional[int]       = None
+        self._last_php:      Optional[int]       = None
+        self._last_ohp:      Optional[int]       = None
+        self._last_activity: float               = -1.0   # wall timestamp
+
+    def update(self, state: "GameState", ts: float) -> str:
+        """
+        Call once per frame with the current GameState and its timestamp.
+
+        Returns one of:
+          'active'            — match appears to still be running
+          'idle_empty_board'  — board empty for empty_board_sec
+          'idle_no_activity'  — dual-channel silent for no_activity_sec
+          'match_end_hp'      — HP dropped to 0 (definitive end)
+        """
+        # ── HP zero ──────────────────────────────────────────────────
+        if (state.player_hp is not None and state.player_hp == 0) or \
+           (state.opponent_hp is not None and state.opponent_hp == 0):
+            return "match_end_hp"
+
+        occupied = state.player_board.occupied()
+
+        # ── Empty-board check ─────────────────────────────────────────
+        if len(occupied) == 0:
+            if self._empty_since is None:
+                self._empty_since = ts
+            elif ts - self._empty_since >= self._empty_sec:
+                return "idle_empty_board"
+        else:
+            self._empty_since = None
+
+        # ── Dual activity check ───────────────────────────────────────
+        fp = _board_fingerprint(state.player_board)
+        board_changed = fp != self._last_fp
+        self._last_fp = fp
+
+        other_changed = (
+            state.wave_number != self._last_wave
+            or state.player_hp   != self._last_php
+            or state.opponent_hp != self._last_ohp
+            or bool(state.active_buffs)   # hero ability / power-up animation active
+        )
+        self._last_wave = state.wave_number
+        self._last_php  = state.player_hp
+        self._last_ohp  = state.opponent_hp
+
+        if board_changed or other_changed:
+            self._last_activity = ts
+
+        # Only trigger after we've seen at least one active frame
+        if (self._last_activity >= 0
+                and ts - self._last_activity >= self._no_act_sec):
+            return "idle_no_activity"
+
+        return "active"
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +209,15 @@ class MatchRunnerConfig:
 
     # Frame normalisation (all frames are scaled to this width before processing)
     target_width: int = 1080
+
+    # Idle / match-end detection
+    # Board completely empty (no units on any cell) for this many seconds → match ended
+    idle_empty_board_sec: float = 12.0
+    # DUAL check: board fingerprint unchanged AND no hero ability / wave / HP changes
+    # for this many seconds → assume stuck on results screen or player walked away
+    idle_no_activity_sec: float = 60.0
+    # Set False to disable all idle detection (e.g. analysing short test clips)
+    idle_detection: bool = True
 
     def __post_init__(self):
         root = _PROJECT_ROOT
@@ -137,6 +260,14 @@ class MatchResult:
 
     final_wave:            Optional[int]   = None
     final_win_probability: Optional[float] = None
+
+    # Why the match loop exited:
+    #   'video_ended'       — source ran out of frames (normal for video files)
+    #   'user_stopped'      — stop() was called
+    #   'idle_empty_board'  — board empty for idle_empty_board_sec seconds
+    #   'idle_no_activity'  — board + hero/wave/HP all silent for idle_no_activity_sec
+    #   'match_end_hp'      — player or opponent HP reached 0
+    end_reason: str = "video_ended"
 
 
 # ---------------------------------------------------------------------------
@@ -260,16 +391,32 @@ class MatchRunner:
             session = mcr.start_match(match_id)
 
             # Open DB connections for the duration of the loop
-            meta_conn, mh_conn = _open_connections(cfg.persist)
+            meta_conn, mh_conn, sa_conn = _open_connections(cfg.persist)
 
             try:
                 if cfg.persist:
                     _write_initial_match_record(mh_conn, match_id,
                                                 self._source_type,
                                                 self._source_path)
+                    if sa_conn is not None:
+                        SummonRepo.open_session(sa_conn, match_id)
+                        sa_conn.commit()
 
                 last_snapshot_time = -999.0   # ensure first frame is written
                 match_start_wall   = time.monotonic()
+
+                # Summon/merge detection state
+                prev_player_board          = None
+                last_merge_time: float     = -999.0   # wall timestamp of last merge
+                last_merged_unit: str | None = None
+                total_summons              = 0
+                total_merges               = 0
+
+                # Idle / match-end detection
+                activity = ActivityMonitor(
+                    empty_board_sec = cfg.idle_empty_board_sec,
+                    no_activity_sec = cfg.idle_no_activity_sec,
+                ) if cfg.idle_detection else None
 
                 for frame, timestamp_sec in self._frame_iterator(src):
                     state = mcr.process_frame(
@@ -292,6 +439,60 @@ class MatchRunner:
                         result.total_snapshots_written += 1
                         last_snapshot_time = timestamp_sec
 
+                    # Summon & merge detection
+                    if cfg.persist and sa_conn is not None and prev_player_board is not None:
+                        merges = _detect_merges(prev_player_board, state.player_board)
+                        for unit_id, from_rank, to_rank in merges:
+                            SummonRepo.insert_merge(sa_conn, {
+                                "match_id":     match_id,
+                                "timestamp_sec": timestamp_sec,
+                                "wave_number":  state.wave_number,
+                                "unit_id":      unit_id,
+                                "from_rank":    from_rank,
+                                "to_rank":      to_rank,
+                            })
+                            last_merge_time  = timestamp_sec
+                            last_merged_unit = unit_id
+                            total_merges    += 1
+
+                        summons = _detect_summons(prev_player_board, state.player_board)
+                        for unit_id in summons:
+                            since_merge = timestamp_sec - last_merge_time
+                            if since_merge <= _POST_MERGE_WINDOW_SEC:
+                                trigger      = "post_merge"
+                                merged_unit  = last_merged_unit
+                                merged_rank  = None   # from_rank not tracked per-summon
+                            else:
+                                trigger      = "manual"
+                                merged_unit  = None
+                                merged_rank  = None
+                            SummonRepo.insert_summon(sa_conn, {
+                                "match_id":       match_id,
+                                "timestamp_sec":  timestamp_sec,
+                                "wave_number":    state.wave_number,
+                                "unit_summoned":  unit_id,
+                                "trigger_type":   trigger,
+                                "merged_unit_id": merged_unit,
+                                "merged_from_rank": merged_rank,
+                            })
+                            total_summons += 1
+
+                    prev_player_board = state.player_board
+
+                    # Idle / match-end check (runs after summon detection so
+                    # the last board state is already recorded before we exit)
+                    if activity is not None:
+                        idle_status = activity.update(state, timestamp_sec)
+                        if idle_status != "active":
+                            result.end_reason = idle_status
+                            print(f"[MatchRunner] Match end detected: {idle_status} "
+                                  f"at t={timestamp_sec:.1f}s — stopping loop.")
+                            break
+
+                # Distinguish a clean user-stop from a source-exhausted exit
+                if self._stop_requested and result.end_reason == "video_ended":
+                    result.end_reason = "user_stopped"
+
                 # ---- Match end ----
                 result.duration_sec          = time.monotonic() - match_start_wall
                 result.player_deck           = session.player_deck
@@ -309,12 +510,26 @@ class MatchRunner:
                     print(f"[MatchRunner] Wrote {result.total_snapshots_written} snapshots "
                           f"for match {match_id}.")
 
+                if cfg.persist and sa_conn is not None:
+                    SummonRepo.close_session(
+                        sa_conn, match_id,
+                        deck_json     = json.dumps(sorted(result.player_deck)),
+                        total_summons = total_summons,
+                        total_merges  = total_merges,
+                    )
+                    sa_conn.commit()
+                    print(f"[MatchRunner] Recorded {total_summons} summons, "
+                          f"{total_merges} merges for summon analysis.")
+
             finally:
                 if meta_conn:
                     meta_conn.close()
                 if mh_conn:
                     mh_conn.commit()
                     mh_conn.close()
+                if sa_conn:
+                    sa_conn.commit()
+                    sa_conn.close()
 
         print(f"[MatchRunner] Done. {result.total_frames_processed} frames processed "
               f"in {result.duration_sec:.1f}s.")
@@ -341,7 +556,7 @@ class MatchRunner:
         if outcome not in ("win", "loss"):
             raise ValueError(f"outcome must be 'win' or 'loss', got {outcome!r}")
 
-        meta_conn, mh_conn = _open_connections(self._config.persist)
+        meta_conn, mh_conn, sa_conn = _open_connections(self._config.persist)
         try:
             if mh_conn is not None:
                 MatchRepo.set_outcome(mh_conn, self._last_match_id, outcome)
@@ -353,6 +568,8 @@ class MatchRunner:
                 meta_conn.close()
             if mh_conn:
                 mh_conn.close()
+            if sa_conn:
+                sa_conn.close()
 
     # ------------------------------------------------------------------
     # Setup helpers
@@ -482,15 +699,17 @@ def _ensure_databases():
 
 
 def _open_connections(persist: bool) -> tuple[Optional[sqlite3.Connection],
+                                               Optional[sqlite3.Connection],
                                                Optional[sqlite3.Connection]]:
     """
-    Open raw sqlite3 connections to unit_meta.db and match_history.db.
+    Open raw sqlite3 connections to unit_meta.db, match_history.db, and
+    summon_analysis.db.
 
-    Returns (meta_conn, mh_conn).  Both are None when persist=False.
+    Returns (meta_conn, mh_conn, sa_conn).  All are None when persist=False.
     The caller owns the connections and must close them.
     """
     if not persist:
-        return None, None
+        return None, None, None
 
     from src.database.connection import _DB_PATHS
 
@@ -502,7 +721,11 @@ def _open_connections(persist: bool) -> tuple[Optional[sqlite3.Connection],
     mh_conn.row_factory = sqlite3.Row
     mh_conn.execute("PRAGMA foreign_keys = ON")
 
-    return meta_conn, mh_conn
+    sa_conn = sqlite3.connect(_DB_PATHS["summon_analysis"])
+    sa_conn.row_factory = sqlite3.Row
+    sa_conn.execute("PRAGMA foreign_keys = ON")
+
+    return meta_conn, mh_conn, sa_conn
 
 
 def _write_initial_match_record(conn: sqlite3.Connection,
@@ -602,3 +825,50 @@ def _write_unit_performance(conn: sqlite3.Connection,
 
     if rows:
         UnitPerformanceRepo.insert_many(conn, rows)
+
+
+# ---------------------------------------------------------------------------
+# Summon & merge detection helpers
+# ---------------------------------------------------------------------------
+
+def _detect_summons(prev: BoardState, curr: BoardState) -> list[str]:
+    """
+    Return a list of unit_ids that newly appeared at rank 1 in a cell that
+    was empty in the previous frame — i.e. a summon event.
+
+    Limitations (inherent to sampled-frame analysis):
+    - If a unit was summoned AND immediately merged between two frames, the
+      summon is invisible to us.
+    - Reincarnations (rank-7 → rank-1 in the same occupied cell) are NOT
+      counted because we require prev cell to be None.
+    """
+    summoned: list[str] = []
+    for row in range(5):
+        for col in range(3):
+            p = prev.get(row, col)
+            c = curr.get(row, col)
+            if p is None and c is not None and c.merge_rank == 1:
+                summoned.append(c.unit_id)
+    return summoned
+
+
+def _detect_merges(prev: BoardState, curr: BoardState) -> list[tuple[str, int, int]]:
+    """
+    Return a list of (unit_id, from_rank, to_rank) tuples for every merge
+    detected between the two board snapshots.
+
+    A merge is inferred when a cell that held a unit at rank N now holds the
+    same unit_id at rank N+1.  We cross-reference with disappearing cells
+    to avoid false positives from reincarnation (rank-7 → rank-1 would not
+    produce an increment, so it is safe to ignore here).
+    """
+    merges: list[tuple[str, int, int]] = []
+    for row in range(5):
+        for col in range(3):
+            p = prev.get(row, col)
+            c = curr.get(row, col)
+            if (p is not None and c is not None
+                    and p.unit_id == c.unit_id
+                    and c.merge_rank == p.merge_rank + 1):
+                merges.append((c.unit_id, p.merge_rank, c.merge_rank))
+    return merges

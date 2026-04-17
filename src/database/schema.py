@@ -257,8 +257,63 @@ CREATE TABLE IF NOT EXISTS unit_performance (
 );
 """
 
+# ---------------------------------------------------------------------------
+# DB 4 — Summon Randomness Analysis
+# ---------------------------------------------------------------------------
+
+SUMMON_ANALYSIS_DDL = """
+CREATE TABLE IF NOT EXISTS summon_sessions (
+    -- One row per tracked match.  deck_json and total counts are filled at
+    -- match end once the full deck composition is confirmed.
+    match_id            TEXT    PRIMARY KEY,
+    recorded_at         TEXT    NOT NULL,
+    deck_json           TEXT,           -- JSON sorted list of player unit_ids; NULL until match ends
+    total_summons       INTEGER NOT NULL DEFAULT 0,
+    total_merges        INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS summon_events (
+    -- One row per detected player summon: a rank-1 unit appearing in a
+    -- previously empty cell.
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_id        TEXT    NOT NULL REFERENCES summon_sessions(match_id),
+    timestamp_sec   REAL,
+    wave_number     INTEGER,
+    unit_summoned   TEXT    NOT NULL,   -- unit_id of the unit that appeared
+
+    -- How the summon was triggered.
+    --   'post_merge' : appeared within POST_MERGE_WINDOW_SEC of a detected merge
+    --   'manual'     : appeared with no recent merge on the board
+    --   'unknown'    : detection was ambiguous (e.g. first frame of match)
+    trigger_type    TEXT    NOT NULL DEFAULT 'unknown',
+
+    -- If trigger_type = 'post_merge', the unit_id and rank that were merged.
+    -- NULL for all other trigger types.
+    merged_unit_id  TEXT,
+    merged_from_rank INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS merge_events (
+    -- One row per detected merge on the player's board.
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_id        TEXT    NOT NULL REFERENCES summon_sessions(match_id),
+    timestamp_sec   REAL,
+    wave_number     INTEGER,
+    unit_id         TEXT    NOT NULL,   -- unit type that was merged
+    from_rank       INTEGER NOT NULL,   -- both source units were at this rank
+    to_rank         INTEGER NOT NULL    -- resulting unit rank (= from_rank + 1)
+);
+
+CREATE INDEX IF NOT EXISTS idx_summon_events_match  ON summon_events(match_id);
+CREATE INDEX IF NOT EXISTS idx_summon_events_unit   ON summon_events(unit_summoned);
+CREATE INDEX IF NOT EXISTS idx_summon_events_trigger ON summon_events(trigger_type);
+CREATE INDEX IF NOT EXISTS idx_merge_events_match   ON merge_events(match_id);
+CREATE INDEX IF NOT EXISTS idx_merge_events_unit    ON merge_events(unit_id);
+"""
+
 ALL_DDL = {
     "visual_reference": VISUAL_REFERENCE_DDL,
-    "unit_meta": UNIT_META_DDL,
-    "match_history": MATCH_HISTORY_DDL,
+    "unit_meta":        UNIT_META_DDL,
+    "match_history":    MATCH_HISTORY_DDL,
+    "summon_analysis":  SUMMON_ANALYSIS_DDL,
 }

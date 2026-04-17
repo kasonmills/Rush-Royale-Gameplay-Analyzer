@@ -18,6 +18,7 @@ _DB_PATHS = {
     "unit_meta":        DATA_DIR / "unit_meta.db",
     "visual_reference": DATA_DIR / "visual_reference.db",
     "match_history":    DATA_DIR / "match_history.db",
+    "summon_analysis":  DATA_DIR / "summon_analysis.db",
 }
 
 
@@ -63,6 +64,19 @@ def visual_ref_db():
 @contextmanager
 def match_history_db():
     conn = _connect("match_history")
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@contextmanager
+def summon_analysis_db():
+    conn = _connect("summon_analysis")
     try:
         yield conn
         conn.commit()
