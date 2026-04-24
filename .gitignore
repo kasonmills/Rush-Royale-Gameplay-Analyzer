@@ -22,6 +22,12 @@ data/*.db
 *.apk
 *.obb
 
+# Device-pulled cache files (proprietary format, unreadable)
+texture_cache/
+
+# APK split extraction output
+apk_splits/
+
 # IDE
 .vscode/
 .idea/
