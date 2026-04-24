@@ -29,6 +29,7 @@ import csv
 import sys
 import zipfile
 from pathlib import Path
+from typing import Optional
 
 try:
     import UnityPy
@@ -48,7 +49,7 @@ def sanitize(name: str) -> str:
     return "".join(c if c.isalnum() or c in "-_." else "_" for c in name)
 
 
-def extract_from_bundle(env, output_dir: Path, name_filter: str | None) -> list[dict]:
+def extract_from_bundle(env, output_dir: Path, name_filter: Optional[str]) -> list[dict]:
     records = []
     for obj in env.objects:
         if obj.type.name not in ("Sprite", "Texture2D"):
@@ -89,7 +90,7 @@ def extract_from_bundle(env, output_dir: Path, name_filter: str | None) -> list[
     return records
 
 
-def process_path(input_path: Path, output_dir: Path, name_filter: str | None) -> list[dict]:
+def process_path(input_path: Path, output_dir: Path, name_filter: Optional[str]) -> list[dict]:
     all_records = []
     suffix = input_path.suffix.lower()
 
