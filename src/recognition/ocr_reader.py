@@ -21,19 +21,27 @@ Pre-processing pipeline per region:
 
 Usage:
     reader = OCRReader()
+    if not reader.available:
+        print("Tesseract not found — install from https://github.com/UB-Mannheim/tesseract/wiki")
 
     readings = reader.read(frame)
     print(readings.wave_number)  # e.g. 12
-    print(readings.player_hp)    # e.g. 100
-    print(readings.opponent_hp)  # e.g. 87
+    print(readings.player_hp)    # e.g. 3
+    print(readings.opponent_hp)  # e.g. 2
     print(readings.player_mana)  # e.g. 4
 """
 
+import os
 from dataclasses import dataclass
 from typing import Optional
 
 import cv2
 import numpy as np
+
+try:
+    import pytesseract as _pytesseract_mod
+except ImportError:
+    _pytesseract_mod = None  # type: ignore[assignment]
 
 
 # Minimum pixel height for an OCR crop before it's upscaled.
@@ -45,6 +53,21 @@ _UPSCALE_TARGET_H = 64
 
 # Tesseract config shared by all digit reads.
 _TESS_CONFIG = "--psm 7 -c tessedit_char_whitelist=0123456789"
+
+# Common Tesseract install paths on Windows (checked in order).
+_WIN_TESSERACT_PATHS = [
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+    r"C:\Users\{}\AppData\Local\Programs\Tesseract-OCR\tesseract.exe".format(
+        os.environ.get("USERNAME", "")
+    ),
+]
+
+# Valid ranges for each HUD field (inclusive).  Values outside these
+# bounds are treated as OCR noise and discarded (returned as None).
+_WAVE_RANGE  = (1, 99)
+_HP_RANGE    = (0, 3)    # PvP: each player has 3 lives
+_MANA_RANGE  = (0, 9)
 
 
 # ---------------------------------------------------------------------------
@@ -71,8 +94,8 @@ class HUDLayout:
     HUD region fractions (left, top, right, bottom) for each OCR target.
     Pass a custom instance to OCRReader to adapt to a different layout.
     """
-    wave:       tuple[float, float, float, float] = _WAVE_REGION
-    player_hp:  tuple[float, float, float, float] = _PLAYER_HP_REGION
+    wave:        tuple[float, float, float, float] = _WAVE_REGION
+    player_hp:   tuple[float, float, float, float] = _PLAYER_HP_REGION
     opponent_hp: tuple[float, float, float, float] = _OPP_HP_REGION
     player_mana: tuple[float, float, float, float] = _PLAYER_MANA_REGION
 
@@ -89,10 +112,39 @@ class HUDReadings:
     player_mana:  Optional[int] = None
 
 
+def _find_tesseract() -> Optional[str]:
+    """
+    Return the path to the Tesseract executable, or None if not found.
+
+    Checks (in order):
+      1. pytesseract's current tesseract_cmd (may already be configured).
+      2. Common Windows install locations.
+      3. PATH (non-Windows / custom installs).
+    """
+    if _pytesseract_mod is None:
+        return None
+
+    cmd = _pytesseract_mod.pytesseract.tesseract_cmd
+    if cmd and cmd != "tesseract" and os.path.isfile(cmd):
+        return cmd
+
+    import shutil
+    # Windows common paths
+    for path in _WIN_TESSERACT_PATHS:
+        if os.path.isfile(path):
+            return path
+
+    # Fall back to PATH lookup
+    return shutil.which("tesseract")
+
+
 class OCRReader:
     """
     Reads numeric HUD elements (wave, HP, mana) from a full frame using
     pytesseract.
+
+    If Tesseract is not installed, all reads return None instead of raising —
+    check ``reader.available`` at startup and warn the user if it is False.
 
     Args:
         layout: HUDLayout with region fractions. Defaults to the tuned
@@ -106,6 +158,14 @@ class OCRReader:
     def __init__(self, layout: HUDLayout = HUDLayout(), invert: bool = False):
         self.layout = layout
         self.invert = invert
+        self._tesseract_path: Optional[str] = _find_tesseract()
+        if self._tesseract_path and _pytesseract_mod is not None:
+            _pytesseract_mod.pytesseract.tesseract_cmd = self._tesseract_path
+
+    @property
+    def available(self) -> bool:
+        """True if Tesseract is installed and reachable."""
+        return self._tesseract_path is not None
 
     # ------------------------------------------------------------------
     # Public API
@@ -116,18 +176,23 @@ class OCRReader:
         Read all HUD numeric elements from a full frame in one call.
 
         Returns HUDReadings with each field set to the parsed integer value,
-        or None if the region could not be read cleanly.
+        or None if the region could not be read cleanly or Tesseract is
+        unavailable.
         """
+        if not self.available:
+            return HUDReadings()
         return HUDReadings(
-            wave_number=self._read_region(frame, self.layout.wave),
-            player_hp=self._read_region(frame, self.layout.player_hp),
-            opponent_hp=self._read_region(frame, self.layout.opponent_hp),
-            player_mana=self._read_region(frame, self.layout.player_mana),
+            wave_number=self._read_wave(frame),
+            player_hp=self._read_hp_value(frame, self.layout.player_hp),
+            opponent_hp=self._read_hp_value(frame, self.layout.opponent_hp),
+            player_mana=self._read_mana(frame),
         )
 
     def read_wave(self, frame: np.ndarray) -> Optional[int]:
         """Read only the wave number from the frame."""
-        return self._read_region(frame, self.layout.wave)
+        if not self.available:
+            return None
+        return self._read_wave(frame)
 
     def read_hp(self, frame: np.ndarray
                 ) -> tuple[Optional[int], Optional[int]]:
@@ -135,14 +200,18 @@ class OCRReader:
         Read both HP values from the frame.
         Returns (player_hp, opponent_hp).
         """
+        if not self.available:
+            return (None, None)
         return (
-            self._read_region(frame, self.layout.player_hp),
-            self._read_region(frame, self.layout.opponent_hp),
+            self._read_hp_value(frame, self.layout.player_hp),
+            self._read_hp_value(frame, self.layout.opponent_hp),
         )
 
     def read_mana(self, frame: np.ndarray) -> Optional[int]:
         """Read only the player mana from the frame."""
-        return self._read_region(frame, self.layout.player_mana)
+        if not self.available:
+            return None
+        return self._read_mana(frame)
 
     def crop_region(self, frame: np.ndarray,
                     region: tuple[float, float, float, float]) -> np.ndarray:
@@ -159,8 +228,21 @@ class OCRReader:
         return frame[y1:y2, x1:x2].copy()
 
     # ------------------------------------------------------------------
-    # Internal
+    # Internal — typed reads with range validation
     # ------------------------------------------------------------------
+
+    def _read_wave(self, frame: np.ndarray) -> Optional[int]:
+        raw = self._read_region(frame, self.layout.wave)
+        return _validate_range(raw, *_WAVE_RANGE)
+
+    def _read_hp_value(self, frame: np.ndarray,
+                       region: tuple[float, float, float, float]) -> Optional[int]:
+        raw = self._read_region(frame, region)
+        return _validate_range(raw, *_HP_RANGE)
+
+    def _read_mana(self, frame: np.ndarray) -> Optional[int]:
+        raw = self._read_region(frame, self.layout.player_mana)
+        return _validate_range(raw, *_MANA_RANGE)
 
     def _read_region(self, frame: np.ndarray,
                      region: tuple[float, float, float, float]) -> Optional[int]:
@@ -175,6 +257,13 @@ class OCRReader:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _validate_range(value: Optional[int], lo: int, hi: int) -> Optional[int]:
+    """Return value if lo ≤ value ≤ hi, else None."""
+    if value is None:
+        return None
+    return value if lo <= value <= hi else None
+
 
 def _preprocess(crop: np.ndarray, invert: bool) -> np.ndarray:
     """
@@ -207,21 +296,9 @@ def _run_ocr(binary: np.ndarray) -> Optional[int]:
     """
     Run pytesseract on a pre-processed binary image and return an integer,
     or None if the result is empty or non-numeric.
-
-    Import is deferred so the rest of the module loads even if pytesseract
-    is not installed (it will only fail at call time).
     """
-    try:
-        import pytesseract
-    except ImportError:
-        raise ImportError(
-            "pytesseract is required for OCRReader. "
-            "Install it with: pip install pytesseract"
-        )
-
-    text = pytesseract.image_to_string(binary, config=_TESS_CONFIG).strip()
+    text = _pytesseract_mod.image_to_string(binary, config=_TESS_CONFIG).strip()
     digits = "".join(ch for ch in text if ch.isdigit())
     if not digits:
         return None
-    value = int(digits)
-    return value
+    return int(digits)
