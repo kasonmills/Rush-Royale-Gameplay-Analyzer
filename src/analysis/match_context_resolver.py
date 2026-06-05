@@ -70,10 +70,12 @@ from typing import Optional
 
 from src.analysis.game_state import GameState, UnitCell
 from src.capture.grid_calibrator import GridCalibrator
+from src.recognition.animation_detector import AnimationDetector
 from src.recognition.hero_classifier import HeroClassifier
 from src.recognition.ocr_reader import OCRReader
 from src.recognition.talent_classifier import TalentClassifier
-from src.recognition.template_matcher import TemplateMatcher
+from src.recognition.template_matcher import MatchResult, TemplateMatcher
+from src.recognition.unit_classifier import UnitClassifier
 
 
 # ---------------------------------------------------------------------------
@@ -153,21 +155,34 @@ class MatchContextResolver:
     Processes frames for an active match and returns a populated GameState.
 
     Args:
-        matcher:           Loaded TemplateMatcher.
-        talent_classifier: Loaded TalentClassifier.
-        hero_classifier:   Loaded HeroClassifier.
-        ocr_reader:        OCRReader instance.
+        matcher:            Loaded TemplateMatcher.
+        talent_classifier:  Loaded TalentClassifier.
+        hero_classifier:    Loaded HeroClassifier.
+        ocr_reader:         OCRReader instance.
+        animation_detector: Optional AnimationDetector.  When provided,
+                            Stage 3.5 runs after board assembly and populates
+                            player_active_buffs / opponent_active_buffs on
+                            each GameState.  When None, those dicts remain empty.
+        unit_classifier:    Optional UnitClassifier.  When provided and loaded,
+                            its top-1 prediction overrides the template matcher's
+                            unit_id for any cell where the classifier confidence
+                            exceeds the NCC score.  Rank and appearance_state
+                            are always taken from the template matcher.
     """
 
     def __init__(self,
                  matcher: TemplateMatcher,
                  talent_classifier: TalentClassifier,
                  hero_classifier: HeroClassifier,
-                 ocr_reader: OCRReader):
-        self._matcher  = matcher
-        self._talent   = talent_classifier
-        self._hero     = hero_classifier
-        self._ocr      = ocr_reader
+                 ocr_reader: OCRReader,
+                 animation_detector: Optional[AnimationDetector] = None,
+                 unit_classifier: Optional[UnitClassifier] = None):
+        self._matcher    = matcher
+        self._talent     = talent_classifier
+        self._hero       = hero_classifier
+        self._ocr        = ocr_reader
+        self._animations = animation_detector
+        self._classifier = unit_classifier
 
     # ------------------------------------------------------------------
     # Public API
@@ -221,6 +236,10 @@ class MatchContextResolver:
 
         # Stage 2 + 3 — board cells + talent path accumulation
         self._process_boards(frame, calibrator, session, state, db_conn)
+
+        # Stage 3.5 — animation detection (optional, when detector is wired in)
+        if self._animations is not None:
+            self._process_animations(frame, calibrator, state)
 
         # Stage 4 — hero identification (cached, periodic refresh)
         self._process_heroes(frame, session, state)
@@ -312,6 +331,29 @@ class MatchContextResolver:
 
         cell_results   = self._matcher.match_all_cells(all_crops, player_deck, opp_deck)
         talent_results = self._talent.classify_all(all_crops)
+
+        # Stage 2.5 — classifier enhancement (when UnitClassifier is loaded).
+        # For each cell where the classifier's confidence exceeds the NCC score,
+        # override unit_id with the classifier's prediction.  Rank and
+        # appearance_state are always preserved from the template matcher.
+        if self._classifier is not None and self._classifier.available:
+            crops_by_key = {(p, r, c): crop for p, r, c, crop in all_crops}
+            for i, (player, row, col, match) in enumerate(cell_results):
+                if match.is_empty or match.unit_id is None:
+                    continue
+                crop = crops_by_key.get((player, row, col))
+                if crop is None:
+                    continue
+                deck = player_deck if player == "player" else opp_deck
+                clf = self._classifier.classify(crop, deck)
+                if clf is not None and clf.confidence > match.confidence:
+                    cell_results[i] = (player, row, col, MatchResult(
+                        unit_id=clf.unit_id,
+                        merge_rank=match.merge_rank,
+                        appearance_state=match.appearance_state,
+                        variant_tag=match.variant_tag,
+                        confidence=clf.confidence,
+                    ))
 
         for player, row, col, match in cell_results:
             if match.is_empty or match.unit_id is None:
@@ -458,6 +500,36 @@ class MatchContextResolver:
 
         state.player_hero_id   = session.player_hero_id
         state.opponent_hero_id = session.opponent_hero_id
+
+    # ------------------------------------------------------------------
+    # Stage 3.5 — Animation detection
+    # ------------------------------------------------------------------
+
+    def _process_animations(self,
+                             frame,
+                             calibrator: GridCalibrator,
+                             state: GameState) -> None:
+        """
+        Detect active buff/debuff animations on all occupied cells.
+
+        Populates state.player_active_buffs and state.opponent_active_buffs
+        ({unit_id: [animation_ids]}) and merges both into state.active_buffs
+        for snapshot serialisation compatibility.
+        """
+        for side, board, buffs_dict in [
+            ("player",   state.player_board,   state.player_active_buffs),
+            ("opponent", state.opponent_board, state.opponent_active_buffs),
+        ]:
+            for row, col, cell in board.occupied():
+                crop = calibrator.crop_cell(frame, side, row, col)
+                anims = self._animations.detect(crop, cell.unit_id)
+                if anims:
+                    buffs_dict[cell.unit_id] = anims
+
+        state.active_buffs = {
+            **state.player_active_buffs,
+            **state.opponent_active_buffs,
+        }
 
     # ------------------------------------------------------------------
     # Stage 5 — HUD OCR

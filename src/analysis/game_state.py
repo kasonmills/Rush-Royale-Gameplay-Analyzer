@@ -40,6 +40,7 @@ class UnitCell:
     appearance_state: str = "base"        # 'base', 'max_level', 'reincarnation_1/2/3'
     variant_tag: Optional[str] = None    # e.g. 'moon'/'sun' for Twins
     recognition_confidence: float = 0.0  # template match or classifier score
+    stat_value: Optional[int] = None     # tile stat counter (souls, charges, etc.)
 
     @property
     def highest_talent_tier(self) -> Optional[int]:
@@ -115,6 +116,9 @@ class GameState:
 
     # Active animations / buffs (unit_id → list of animation names)
     active_buffs: dict[str, list[str]] = field(default_factory=dict)
+    # Side-specific buff dicts populated by AnimationDetector (Stage 3.5 in MCR)
+    player_active_buffs: dict[str, list[str]] = field(default_factory=dict)
+    opponent_active_buffs: dict[str, list[str]] = field(default_factory=dict)
 
     # Analysis outputs
     win_probability: Optional[float] = None  # Phase 1 formula output
@@ -142,6 +146,7 @@ class GameState:
                     "talent_path": cell.talent_path,
                     "variant": cell.variant_tag,
                     "confidence": round(cell.recognition_confidence, 3),
+                    "stat_value": cell.stat_value,
                 })
             return json.dumps(cells)
 

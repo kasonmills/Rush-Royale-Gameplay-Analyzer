@@ -23,12 +23,8 @@ REFERENCE_DIR   = PROJECT_ROOT / "assets" / "reference"
 UNITS_CSV       = PROJECT_ROOT / "data" / "Units Master.csv"
 
 # Manual overrides: screenshot stem (lowercase) -> unit_id
-# Used for typos and names that don't match the CSV display name.
-MANUAL_OVERRIDES = {
-    "brusier":          "bruiser",
-    "executioneer":     "executioner",
-    "frankie and stein": "franky_and_stein",
-}
+# Used when a filename can't be matched to a CSV display name automatically.
+MANUAL_OVERRIDES: dict[str, str] = {}
 
 
 def load_unit_id_map() -> dict[str, str]:

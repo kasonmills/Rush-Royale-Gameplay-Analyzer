@@ -4,15 +4,17 @@ Tests for OCRReader.
 Covers:
   - _preprocess(): grayscale conversion, invert, upscaling, binarisation
   - _validate_range(): in-range pass-through, out-of-range → None
+  - _count_hearts(): red-blob counting, noise filtering, empty crop
   - _find_tesseract(): path detection logic
   - OCRReader.crop_region(): fraction-to-pixel mapping
   - OCRReader.available: reflects whether Tesseract was found
   - OCRReader.read() / read_wave() / read_hp() / read_mana():
-      graceful None returns when Tesseract is unavailable
-  - OCRReader.read() / read_wave() / read_hp() / read_mana():
-      correct dispatch and range validation when Tesseract is mocked
+      correct behaviour with and without Tesseract
+  - OCRReader.read() / read_wave(): correct dispatch and range validation
+      when Tesseract is mocked
 
 pytesseract is always mocked so tests run without a Tesseract installation.
+HP detection (_count_hearts) does not require Tesseract.
 """
 
 from unittest.mock import MagicMock, patch
@@ -25,6 +27,7 @@ from src.recognition.ocr_reader import (
     HUDLayout,
     HUDReadings,
     OCRReader,
+    _count_hearts,
     _preprocess,
     _validate_range,
 )
@@ -36,7 +39,22 @@ from src.recognition.ocr_reader import (
 
 def _solid_frame(h: int = 200, w: int = 100, color: tuple = (128, 128, 128)) -> np.ndarray:
     """Return a solid-colour BGR frame of the given size."""
-    frame = np.full((h, w, 3), color, dtype=np.uint8)
+    return np.full((h, w, 3), color, dtype=np.uint8)
+
+
+def _frame_with_red_blobs(h: int, w: int, n_blobs: int,
+                           blob_size: int = 15) -> np.ndarray:
+    """
+    Return a grey BGR frame with n_blobs separate red squares.
+    Each blob is blob_size × blob_size, evenly spaced horizontally.
+    """
+    frame = np.full((h, w, 3), 128, dtype=np.uint8)
+    spacing = w // (n_blobs + 1)
+    for i in range(n_blobs):
+        cx = (i + 1) * spacing
+        x = max(0, min(cx - blob_size // 2, w - blob_size))
+        y = max(0, min(h // 2 - blob_size // 2, h - blob_size))
+        frame[y:y + blob_size, x:x + blob_size] = (0, 0, 255)  # BGR red
     return frame
 
 
@@ -51,7 +69,7 @@ def _make_reader_with_tesseract(mock_path: str = r"C:\fake\tesseract.exe") -> OC
     """Return an OCRReader that believes Tesseract is at mock_path."""
     with patch("src.recognition.ocr_reader._find_tesseract", return_value=mock_path):
         reader = OCRReader()
-    reader._tesseract_path = mock_path  # ensure available == True
+    reader._tesseract_path = mock_path
     return reader
 
 
@@ -116,17 +134,59 @@ class TestPreprocess:
     def test_invert_flips_values(self):
         """A white crop inverted should become black after binarisation."""
         white_crop = _solid_frame(50, 50, (255, 255, 255))
-        normal  = _preprocess(white_crop, invert=False)
+        normal   = _preprocess(white_crop, invert=False)
         inverted = _preprocess(white_crop, invert=True)
-        # After invert, white→black; binarisation may produce different dominant value
         assert not np.array_equal(normal, inverted)
 
     def test_output_shape_preserves_width_ratio(self):
         """Width scaling should be proportional to height scaling."""
         crop = _solid_frame(16, 80)  # height below MIN, width 80
         result = _preprocess(crop, invert=False)
-        # height should be 64, width should be 80 * (64/16) = 320
+        # height → 64, width → 80 * (64/16) = 320
         assert result.shape == (64, 320)
+
+
+# ---------------------------------------------------------------------------
+# _count_hearts
+# ---------------------------------------------------------------------------
+
+class TestCountHearts:
+
+    def test_empty_crop_returns_none(self):
+        empty = np.zeros((0, 0, 3), dtype=np.uint8)
+        assert _count_hearts(empty) is None
+
+    def test_grey_crop_returns_zero(self):
+        grey = _solid_frame(50, 100, (128, 128, 128))
+        assert _count_hearts(grey) == 0
+
+    def test_blue_crop_returns_zero(self):
+        """Blue pixels should not be counted as hearts."""
+        blue = _solid_frame(50, 100, (255, 0, 0))  # BGR blue
+        assert _count_hearts(blue) == 0
+
+    def test_one_red_blob_counts_as_one_heart(self):
+        frame = _frame_with_red_blobs(50, 100, n_blobs=1)
+        assert _count_hearts(frame) == 1
+
+    def test_two_red_blobs_count_as_two_hearts(self):
+        frame = _frame_with_red_blobs(50, 150, n_blobs=2)
+        assert _count_hearts(frame) == 2
+
+    def test_three_red_blobs_count_as_three_hearts(self):
+        frame = _frame_with_red_blobs(50, 200, n_blobs=3)
+        assert _count_hearts(frame) == 3
+
+    def test_tiny_noise_is_filtered(self):
+        """A 5×5 (25 px²) red blob is below _MIN_HEART_AREA and ignored."""
+        frame = np.full((50, 50, 3), 128, dtype=np.uint8)
+        frame[20:25, 20:25] = (0, 0, 255)  # 5×5 red square
+        assert _count_hearts(frame) == 0
+
+    def test_result_capped_at_three(self):
+        """Even with 4+ blobs the maximum returned is 3."""
+        frame = _frame_with_red_blobs(50, 300, n_blobs=4, blob_size=15)
+        assert _count_hearts(frame) == 3
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +215,7 @@ class TestCropRegion:
         assert frame[0, 0, 0] != 0  # original unmodified
 
     def test_clamps_to_frame_bounds(self):
-        """Fractions > 1 or producing negative sizes should not crash."""
+        """Fractions > 1 should not crash."""
         frame = _solid_frame(100, 200)
         reader = _make_reader_no_tesseract()
         crop = reader.crop_region(frame, (0.0, 0.0, 1.5, 1.5))
@@ -178,7 +238,7 @@ class TestAvailable:
 
 
 # ---------------------------------------------------------------------------
-# Graceful degradation — all reads return None when Tesseract unavailable
+# Behaviour without Tesseract
 # ---------------------------------------------------------------------------
 
 class TestGracefulDegradation:
@@ -187,21 +247,22 @@ class TestGracefulDegradation:
         self.reader = _make_reader_no_tesseract()
         self.frame  = _solid_frame(2340, 1080)
 
-    def test_read_returns_all_none(self):
+    def test_read_wave_none_and_hp_zero_no_mana(self):
         result = self.reader.read(self.frame)
         assert isinstance(result, HUDReadings)
-        assert result.wave_number  is None
-        assert result.player_hp    is None
-        assert result.opponent_hp  is None
-        assert result.player_mana  is None
+        assert result.wave_number is None   # needs Tesseract
+        assert result.player_hp   == 0     # colour-based; grey → 0
+        assert result.opponent_hp == 0     # colour-based; grey → 0
+        assert result.player_mana is None  # not implemented
 
     def test_read_wave_returns_none(self):
         assert self.reader.read_wave(self.frame) is None
 
-    def test_read_hp_returns_none_tuple(self):
+    def test_read_hp_returns_zero_on_grey_frame(self):
+        """HP detection is colour-based and does not need Tesseract."""
         p, o = self.reader.read_hp(self.frame)
-        assert p is None
-        assert o is None
+        assert p == 0
+        assert o == 0
 
     def test_read_mana_returns_none(self):
         assert self.reader.read_mana(self.frame) is None
@@ -213,8 +274,9 @@ class TestGracefulDegradation:
 
 class TestOCRDispatch:
     """
-    Tests that verify OCRReader routes to the right region and applies
-    the correct range validation, with pytesseract returning a fixed string.
+    Verifies OCRReader routes to the right region and applies correct range
+    validation for wave number, with pytesseract returning a fixed string.
+    HP is colour-based so it is not affected by the OCR mock.
     """
 
     def _make_reader_mocked_ocr(self, ocr_return: str) -> OCRReader:
@@ -244,33 +306,15 @@ class TestOCRDispatch:
         result = self._run_read(reader, "100")
         assert result.wave_number is None
 
-    def test_hp_3_passed_through(self):
-        reader = self._make_reader_mocked_ocr("3")
-        result = self._run_read(reader, "3")
-        assert result.player_hp == 3
-        assert result.opponent_hp == 3
-
-    def test_hp_4_rejected(self):
-        reader = self._make_reader_mocked_ocr("4")
-        result = self._run_read(reader, "4")
-        assert result.player_hp is None
-        assert result.opponent_hp is None
-
-    def test_mana_9_passed_through(self):
-        reader = self._make_reader_mocked_ocr("9")
-        result = self._run_read(reader, "9")
-        assert result.player_mana == 9
-
-    def test_mana_10_rejected(self):
-        reader = self._make_reader_mocked_ocr("10")
-        result = self._run_read(reader, "10")
+    def test_mana_always_none(self):
+        reader = self._make_reader_mocked_ocr("5")
+        result = self._run_read(reader, "5")
         assert result.player_mana is None
 
-    def test_empty_ocr_returns_none(self):
+    def test_empty_ocr_returns_none_wave(self):
         reader = self._make_reader_mocked_ocr("")
         result = self._run_read(reader, "")
         assert result.wave_number is None
-        assert result.player_hp   is None
         assert result.player_mana is None
 
     def test_noisy_ocr_strips_non_digits(self):

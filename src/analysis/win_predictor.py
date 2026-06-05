@@ -54,6 +54,7 @@ import math
 from typing import Optional
 
 from src.analysis.game_state import GameState
+from src.analysis.synergy_detector import SynergyDetector
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +82,9 @@ _MAX_SCORE = 10.0
 # HP values observed by OCR are in the range 0–3.
 _MAX_HP = 3
 
+# Standard Rush Royale deck size — used to normalise buff advantage.
+_MAX_DECK_SIZE = 5
+
 
 # ---------------------------------------------------------------------------
 # WinPredictor
@@ -91,10 +95,18 @@ class WinPredictor:
     Computes win probability from a GameState snapshot using the Phase 1
     weighted formula.
 
-    The predictor is stateless — call predict() on any GameState.  When a
-    db_conn is provided the tier-score-dependent components are populated;
-    without one, only rank efficiency and HP trajectory contribute.
+    When a db_conn is provided the tier-score-dependent components are
+    populated; without one, only rank efficiency and HP trajectory contribute.
+
+    Args:
+        synergy_detector: Optional pre-loaded SynergyDetector.  When provided,
+                          the synergy component is active.  When None, that
+                          component returns 0.0 (neutral).
     """
+
+    def __init__(self,
+                 synergy_detector: Optional[SynergyDetector] = None):
+        self._synergies = synergy_detector
 
     def predict(self,
                 state: GameState,
@@ -115,10 +127,9 @@ class WinPredictor:
         hero        = _W_HERO       * self._hero_advantage(state, db_conn)
         hp_traj     = _W_HP_TRAJ    * self._hp_trajectory_advantage(state)
 
-        # Phase 3 components — return 0.0 until implemented
-        buffs       = _W_BUFFS    * 0.0
-        stat_nums   = _W_STAT_NUMS * 0.0
-        synergy     = _W_SYNERGY  * 0.0
+        buffs       = _W_BUFFS    * self._compute_buff_advantage(state)
+        stat_nums   = _W_STAT_NUMS * 0.0   # Phase 3 stat OCR — placeholder
+        synergy     = _W_SYNERGY  * self._compute_synergy_advantage(state)
 
         raw = deck_tier + rank_eff + hero + hp_traj + buffs + stat_nums + synergy
         probability = _sigmoid(raw * _SENSITIVITY)
@@ -296,6 +307,55 @@ class WinPredictor:
             (hero_id,)
         ).fetchone()
         return float(row["score"]) if row and row["score"] is not None else None
+
+    # ------------------------------------------------------------------
+    # Component: active buff / debuff modifiers (12 %)
+    # ------------------------------------------------------------------
+
+    def _compute_buff_advantage(self, state: GameState) -> float:
+        """
+        Advantage from active buff/debuff animations in [-1.0, 1.0].
+
+        Counts the number of distinct buffed units per side.  A unit counts
+        once regardless of how many simultaneous animations it has.
+
+        Normalised by the maximum deck size (5 units) so that the worst-case
+        scenario — opponent has 5 units buffed, player has 0 — maps to -1.0.
+        Returns 0.0 when neither side has any detected animations.
+        """
+        p_count = len(state.player_active_buffs)
+        o_count = len(state.opponent_active_buffs)
+        if p_count == 0 and o_count == 0:
+            return 0.0
+        return (p_count - o_count) / _MAX_DECK_SIZE
+
+    # ------------------------------------------------------------------
+    # Component: synergy activation score (5 %)
+    # ------------------------------------------------------------------
+
+    def _compute_synergy_advantage(self, state: GameState) -> float:
+        """
+        Advantage from active synergies in [-1.0, 1.0].
+
+        Sums the strength_bonus of every active synergy per side and
+        normalises by the combined total so the result is always in [-1, 1].
+        Returns 0.0 when no SynergyDetector is loaded or neither side has
+        any active synergies.
+        """
+        if self._synergies is None:
+            return 0.0
+
+        p_results = self._synergies.detect(state.player_board)
+        o_results = self._synergies.detect(state.opponent_board)
+
+        p_score = sum(s.strength_bonus for s in p_results)
+        o_score = sum(s.strength_bonus for s in o_results)
+
+        total = p_score + o_score
+        if total == 0.0:
+            return 0.0
+
+        return (p_score - o_score) / total
 
     # ------------------------------------------------------------------
     # Component: wave survival trajectory (2 %)
