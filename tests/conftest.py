@@ -12,7 +12,7 @@ it cares about and get sensible defaults for everything else.
 Game rules reminder
 -------------------
 - Each player has 3 lives (HP range 0–3) in PvP mode.
-- Board is 3 columns × 5 rows; merge ranks run 1–7 (Treant caps at 4).
+- Board is 3 rows × 5 columns; merge ranks run 1–7 (Treant caps at 4).
 - A deck is exactly 5 unit types.
 """
 
@@ -160,7 +160,7 @@ def populated_state():
     p_board = make_board(
         (0, 0, make_cell("archer",  merge_rank=3)),
         (1, 1, make_cell("knight",  merge_rank=2)),
-        (4, 2, make_cell("chemist", merge_rank=1)),
+        (2, 4, make_cell("chemist", merge_rank=1)),
     )
     o_board = make_board(
         (0, 0, make_cell("rogue",   merge_rank=4)),

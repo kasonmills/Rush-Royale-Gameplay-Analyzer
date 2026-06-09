@@ -459,7 +459,7 @@ class CellWidget(QFrame):
 # ---------------------------------------------------------------------------
 
 class BoardWidget(QGroupBox):
-    """One player's full board: 5 rows × 3 columns of CellWidgets."""
+    """One player's full board: 3 rows × 5 columns of CellWidgets."""
 
     def __init__(self, title: str, unit_names: dict[str, str], parent=None):
         super().__init__(title, parent)
@@ -468,10 +468,8 @@ class BoardWidget(QGroupBox):
         outer = QVBoxLayout(self)
         outer.setSpacing(4)
 
-        # Display: 3 rows (one per board column/lane) × 5 columns (depth positions)
-        # Mapping from BoardState (game_row 0-4, game_col 0-2):
-        #   visual_row = game_col  (0, 1, 2)
-        #   visual_col = game_row  (0, 1, 2, 3, 4)
+        # Display: 3 rows (back/mid/front) × 5 columns (left to right).
+        # BoardState is now 3 rows × 5 cols, so visual and game coords are 1-to-1.
         grid = QGridLayout()
         grid.setSpacing(3)
         self._cells: list[list[CellWidget]] = []   # [visual_row][visual_col]
@@ -489,10 +487,9 @@ class BoardWidget(QGroupBox):
         for row in self._cells:
             for cell in row:
                 cell.clear()
-        # Fill occupied — map (game_row, game_col) → (visual_row=game_col, visual_col=game_row)
         for game_row, game_col, unit_cell in board.occupied():
             name = self._unit_names.get(unit_cell.unit_id, unit_cell.unit_id)
-            self._cells[game_col][game_row].set_unit(
+            self._cells[game_row][game_col].set_unit(
                 name, unit_cell.merge_rank, unit_cell.highest_talent_tier
             )
 

@@ -117,7 +117,7 @@ class TestDetectAbsenceAndPresence:
         det = _make_detector(_nonpositional("engineer", "harlequin", strength=0.8))
         board = make_board(
             (0, 0, make_cell("engineer")),
-            (4, 2, make_cell("harlequin")),  # far apart — shouldn't matter
+            (2, 4, make_cell("harlequin")),  # far apart — shouldn't matter
         )
         results = det.detect(board)
         assert len(results) == 1
@@ -204,7 +204,7 @@ class TestDetectPositional:
         det = _make_detector(_positional("inquisitor", "knight_statue"))
         board = make_board(
             (0, 0, make_cell("inquisitor")),
-            (4, 2, make_cell("knight_statue")),  # opposite corners
+            (2, 4, make_cell("knight_statue")),  # opposite corners
         )
         assert det.detect(board) == []
 
@@ -212,7 +212,7 @@ class TestDetectPositional:
         det = _make_detector(_nonpositional("inquisitor", "knight_statue"))
         board = make_board(
             (0, 0, make_cell("inquisitor")),
-            (4, 2, make_cell("knight_statue")),
+            (2, 4, make_cell("knight_statue")),
         )
         assert len(det.detect(board)) == 1
 
@@ -472,7 +472,7 @@ class TestComputeSynergyAdvantage:
         predictor = WinPredictor(synergy_detector=det)
         p_board = make_board(
             (0, 0, make_cell("inquisitor")),
-            (4, 2, make_cell("knight_statue")),  # both present, not adjacent
+            (2, 4, make_cell("knight_statue")),  # both present, not adjacent
         )
         state = make_state(player_board=p_board)
         adv = predictor._compute_synergy_advantage(state)

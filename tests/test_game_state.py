@@ -96,12 +96,12 @@ class TestBoardState:
     def test_occupied_returns_all_filled_cells(self):
         board = make_board(
             (0, 0, make_cell("a")),
-            (3, 2, make_cell("b")),
+            (2, 4, make_cell("b")),
         )
         occupied = board.occupied()
         assert len(occupied) == 2
         coords = {(r, c) for r, c, _ in occupied}
-        assert coords == {(0, 0), (3, 2)}
+        assert coords == {(0, 0), (2, 4)}
 
     def test_occupied_returns_correct_cells(self):
         cell = make_cell("knight", 3)
@@ -138,14 +138,14 @@ class TestBoardState:
 
     def test_board_is_3x5(self):
         board = BoardState()
-        assert len(board.cells) == 5
+        assert len(board.cells) == 3
         for row in board.cells:
-            assert len(row) == 3
+            assert len(row) == 5
 
     def test_all_corners_accessible(self):
         board = BoardState()
-        for row in (0, 4):
-            for col in (0, 2):
+        for row in (0, 2):
+            for col in (0, 4):
                 board.set(row, col, make_cell())
         assert len(board.occupied()) == 4
 

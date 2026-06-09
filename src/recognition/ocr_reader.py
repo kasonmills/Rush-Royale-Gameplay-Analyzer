@@ -54,8 +54,12 @@ _MIN_OCR_HEIGHT = 32
 # Upscale target height when the crop is below the minimum.
 _UPSCALE_TARGET_H = 64
 
-# Tesseract config shared by all digit reads.
-_TESS_CONFIG = "--psm 7 -c tessedit_char_whitelist=0123456789"
+# Tesseract configs tried in order; first valid result wins.
+_TESS_CONFIGS = [
+    "--psm 7 -c tessedit_char_whitelist=0123456789",   # single text line
+    "--psm 8 -c tessedit_char_whitelist=0123456789",   # single word
+    "--psm 13 -c tessedit_char_whitelist=0123456789",  # raw line, no segmentation
+]
 
 # Common Tesseract install paths on Windows (checked in order).
 _WIN_TESSERACT_PATHS = [
@@ -76,17 +80,20 @@ _MIN_HEART_AREA = 50
 
 # ---------------------------------------------------------------------------
 # HUD region definitions — (left_frac, top_frac, right_frac, bottom_frac)
-# Tuned for a 360×640 portrait scrcpy stream; validated against gameplay footage.
+# Calibrated from reference footage (360×640 portrait).
+# All regions are in the centre divider strip between the two boards
+# (vertically: ~43–50% of frame height).
 # ---------------------------------------------------------------------------
 
 # "Wave N" text in the centre divider strip between the two boards.
-_WAVE_REGION = (0.22, 0.43, 0.60, 0.49)
+_WAVE_REGION = (0.28, 0.43, 0.60, 0.49)
 
-# Player castle HP: red heart icons to the LEFT of the centre divider strip.
+# Player castle HP: red heart icons left of centre in the divider strip.
 _PLAYER_HP_REGION = (0.02, 0.43, 0.28, 0.50)
 
-# Opponent castle HP: heart/skull icons to the RIGHT of the centre divider strip.
-_OPP_HP_REGION = (0.62, 0.43, 0.97, 0.50)
+# Opponent castle HP: heart/skull icons right of centre — capped at 0.90
+# to stay inside the game area (rightmost ~10% is hero portrait sidebar).
+_OPP_HP_REGION = (0.58, 0.43, 0.90, 0.50)
 
 # Player mana: crystal icon sprites along the left edge of the player board.
 _PLAYER_MANA_REGION = (0.00, 0.49, 0.07, 0.72)
@@ -311,9 +318,12 @@ def _run_ocr(binary: np.ndarray) -> Optional[int]:
     """
     Run pytesseract on a pre-processed binary image and return an integer,
     or None if the result is empty or non-numeric.
+
+    Tries multiple PSM modes in order; returns the first valid digit string.
     """
-    text = _pytesseract_mod.image_to_string(binary, config=_TESS_CONFIG).strip()
-    digits = "".join(ch for ch in text if ch.isdigit())
-    if not digits:
-        return None
-    return int(digits)
+    for cfg in _TESS_CONFIGS:
+        text = _pytesseract_mod.image_to_string(binary, config=cfg).strip()
+        digits = "".join(ch for ch in text if ch.isdigit())
+        if digits:
+            return int(digits)
+    return None

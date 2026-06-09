@@ -36,7 +36,7 @@ import numpy as np
 
 # Expected game aspect ratio (width / height) for Rush Royale portrait layout.
 # Phone native is ~9:19.5 ≈ 0.46; desktop may differ but is still portrait.
-_GAME_ASPECT_MIN = 0.40
+_GAME_ASPECT_MIN = 0.35
 _GAME_ASPECT_MAX = 0.65
 
 
@@ -257,6 +257,14 @@ def _detect_game_region_in_frame(
       - Validate that the candidate occupies at least 15% of the total frame area.
     """
     fh, fw = frame.shape[:2]
+
+    # Native phone recordings already have the correct portrait aspect ratio —
+    # no overlay or letterboxing to strip, so use the full frame directly.
+    if fh > 0:
+        frame_aspect = fw / fh
+        if _GAME_ASPECT_MIN <= frame_aspect <= _GAME_ASPECT_MAX:
+            return (0, 0, fw, fh)
+
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
     # Rush Royale game background is dark; non-game areas tend to be lighter

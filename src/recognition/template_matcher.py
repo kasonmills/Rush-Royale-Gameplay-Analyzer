@@ -311,12 +311,11 @@ def _resize_to_height(img: np.ndarray, target_h: int) -> np.ndarray:
 def _max_ncc_score(cell_crop: np.ndarray, entry: _TemplateEntry) -> float:
     """Peak NCC score across all pre-scaled templates for this entry."""
     best = -1.0
-    for target_h, template in entry.images.items():
-        resized = _resize_to_height(cell_crop, target_h)
+    for _, template in entry.images.items():
         th, tw = template.shape[:2]
-        ch, cw = resized.shape[:2]
-        if ch < th or cw < tw:
-            continue
+        # Resize the crop to the exact template dimensions so NCC is a
+        # direct 1-to-1 comparison regardless of the cell's native aspect ratio.
+        resized = cv2.resize(cell_crop, (tw, th), interpolation=cv2.INTER_AREA)
         result = cv2.matchTemplate(resized, template, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, _ = cv2.minMaxLoc(result)
         if max_val > best:
@@ -325,9 +324,9 @@ def _max_ncc_score(cell_crop: np.ndarray, entry: _TemplateEntry) -> float:
 
 
 def _is_empty_cell(cell_crop: np.ndarray) -> bool:
-    """Returns True if the cell appears to be empty (dark or uniform)."""
+    """Returns True if the cell appears to be empty (dark AND uniform)."""
     if cell_crop.size == 0:
         return True
     gray = cv2.cvtColor(cell_crop, cv2.COLOR_BGR2GRAY)
     mean_val, std_dev = cv2.meanStdDev(gray)
-    return float(mean_val[0][0]) < 15 or float(std_dev[0][0]) < 8
+    return float(mean_val[0][0]) < 15 and float(std_dev[0][0]) < 8

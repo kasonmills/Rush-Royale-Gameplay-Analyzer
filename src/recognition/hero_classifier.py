@@ -46,15 +46,18 @@ CONFIDENCE_THRESHOLD = 0.55
 
 # ---------------------------------------------------------------------------
 # HUD portrait region — fractions of (frame_width, frame_height)
-# Tuned for a 1080×2340 portrait stream.
+# Calibrated from reference footage (360×640).
+# Hero icons sit in the RIGHT sidebar (~81–100% of width):
+#   player hero  — bottom-right corner
+#   opponent hero — top-right corner
 # Each region is (left_frac, top_frac, right_frac, bottom_frac).
 # ---------------------------------------------------------------------------
 
-# Player portrait: lower area of the frame, left of the HP bar
-_PLAYER_PORTRAIT = (0.02, 0.91, 0.14, 0.99)
+# Player portrait: bottom-right corner of the frame
+_PLAYER_PORTRAIT = (0.81, 0.88, 1.00, 1.00)
 
-# Opponent portrait: upper area of the frame, left of the HP bar
-_OPP_PORTRAIT    = (0.02, 0.01, 0.14, 0.09)
+# Opponent portrait: top-right corner of the frame
+_OPP_PORTRAIT    = (0.81, 0.00, 1.00, 0.064)
 
 
 @dataclass

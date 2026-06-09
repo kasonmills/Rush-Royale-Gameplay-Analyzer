@@ -843,8 +843,8 @@ def _detect_summons(prev: BoardState, curr: BoardState) -> list[str]:
       counted because we require prev cell to be None.
     """
     summoned: list[str] = []
-    for row in range(5):
-        for col in range(3):
+    for row in range(3):
+        for col in range(5):
             p = prev.get(row, col)
             c = curr.get(row, col)
             if p is None and c is not None and c.merge_rank == 1:
@@ -863,8 +863,8 @@ def _detect_merges(prev: BoardState, curr: BoardState) -> list[tuple[str, int, i
     produce an increment, so it is safe to ignore here).
     """
     merges: list[tuple[str, int, int]] = []
-    for row in range(5):
-        for col in range(3):
+    for row in range(3):
+        for col in range(5):
             p = prev.get(row, col)
             c = curr.get(row, col)
             if (p is not None and c is not None

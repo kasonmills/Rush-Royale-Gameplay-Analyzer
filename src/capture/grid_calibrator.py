@@ -29,27 +29,32 @@ import numpy as np
 
 
 # ---------------------------------------------------------------------------
-# Default layout constants (tuned for a 1080×2340 scrcpy portrait stream)
-# These are approximate starting points; interactive calibration refines them.
+# Default layout constants — calibrated from reference footage (360×640).
+# Rush Royale PvP portrait layout: game boards occupy the left ~75% of width;
+# hero portrait icons sit in the right ~19% alongside a player webcam strip.
+# These fractions are resolution-independent (applied to any frame size).
+# Use GridCalibrator.interactive() to refine for a different device/layout.
 # ---------------------------------------------------------------------------
 
 # Fraction of frame height where each board starts/ends
-_PLAYER_BOARD_TOP_FRAC    = 0.55   # player board top edge
-_PLAYER_BOARD_BOTTOM_FRAC = 0.92   # player board bottom edge
-_OPP_BOARD_TOP_FRAC       = 0.08   # opponent board top edge
-_OPP_BOARD_BOTTOM_FRAC    = 0.45   # opponent board bottom edge
+_PLAYER_BOARD_TOP_FRAC    = 0.56   # player board top edge
+_PLAYER_BOARD_BOTTOM_FRAC = 0.84   # player board bottom edge
+_OPP_BOARD_TOP_FRAC       = 0.064  # opponent board top edge
+_OPP_BOARD_BOTTOM_FRAC    = 0.345  # opponent board bottom edge
 
 # Deck icon strip — the 5 unit icons always visible below each board.
 # Player deck icons sit just below the player board; opponent deck icons
 # sit just above the opponent board.
-_PLAYER_DECK_TOP_FRAC     = 0.93   # just below player board
-_PLAYER_DECK_BOTTOM_FRAC  = 0.99
-_OPP_DECK_TOP_FRAC        = 0.01   # just above opponent board
-_OPP_DECK_BOTTOM_FRAC     = 0.07
+_PLAYER_DECK_TOP_FRAC     = 0.88   # just below player board
+_PLAYER_DECK_BOTTOM_FRAC  = 1.00
+_OPP_DECK_TOP_FRAC        = 0.00   # just above opponent board
+_OPP_DECK_BOTTOM_FRAC     = 0.064
 
-# Fraction of frame width for the board left/right edges
-_BOARD_LEFT_FRAC  = 0.04
-_BOARD_RIGHT_FRAC = 0.96
+# Fraction of frame width for the board left/right edges.
+# Boards do not extend to the full frame width — the rightmost ~10% is
+# occupied by hero portrait icons and (in some recordings) a webcam strip.
+_BOARD_LEFT_FRAC  = 0.15
+_BOARD_RIGHT_FRAC = 0.90
 
 DECK_SIZE = 5  # Rush Royale decks are always 5 units
 
@@ -62,7 +67,7 @@ class GridRect:
     w: int
     h: int
 
-    def cell_rect(self, row: int, col: int, rows: int = 5, cols: int = 3
+    def cell_rect(self, row: int, col: int, rows: int = 3, cols: int = 5
                   ) -> tuple[int, int, int, int]:
         """
         Returns (x, y, w, h) for a single cell within this board rect.
@@ -84,8 +89,8 @@ class CalibrationData:
     opponent_board: GridRect
     player_deck: GridRect       # 5-icon strip below the player board
     opponent_deck: GridRect     # 5-icon strip above the opponent board
-    rows: int = 5
-    cols: int = 3
+    rows: int = 3
+    cols: int = 5
 
 
 class GridCalibrator:
@@ -143,8 +148,8 @@ class GridCalibrator:
             opponent_board=_rect("opponent_board"),
             player_deck=_rect("player_deck"),
             opponent_deck=_rect("opponent_deck"),
-            rows=raw.get("rows", 5),
-            cols=raw.get("cols", 3),
+            rows=raw.get("rows", 3),
+            cols=raw.get("cols", 5),
         )
         return cls(data)
 
@@ -269,8 +274,8 @@ class GridCalibrator:
         """
         Crops and returns the image for cell (row, col) on the given player's board.
         player: 'player' or 'opponent'
-        row: 0 (back) – 4 (front)
-        col: 0 (left) – 2 (right)
+        row: 0 (back) – 2 (front)
+        col: 0 (left) – 4 (right)
         """
         x, y, w, h = self._cell_rect(player, row, col)
         # Clamp to frame bounds

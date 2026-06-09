@@ -69,7 +69,7 @@ def _is_empty_cell(cell_crop: np.ndarray) -> bool:
         return True
     gray = cv2.cvtColor(cell_crop, cv2.COLOR_BGR2GRAY)
     mean_val, std_dev = cv2.meanStdDev(gray)
-    return float(mean_val[0][0]) < _EMPTY_MEAN_THRESHOLD or \
+    return float(mean_val[0][0]) < _EMPTY_MEAN_THRESHOLD and \
            float(std_dev[0][0]) < _EMPTY_STD_THRESHOLD
 
 

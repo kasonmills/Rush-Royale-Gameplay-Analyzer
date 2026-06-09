@@ -6,9 +6,9 @@ analysis engine and win predictor.
 
 Board layout:
   Rush Royale PvP is played in portrait orientation.
-  Each player has a 3-column × 5-row grid (15 cells).
+  Each player has a 3-row × 5-column grid (15 cells).
   Cells are referenced as (row, col) where row=0 is the back row
-  (furthest from the monster path) and row=4 is the front row.
+  (furthest from the monster path) and row=2 is the front row.
 
 Cell contents:
   A cell is None when empty, or a UnitCell when occupied.
@@ -61,11 +61,11 @@ class BoardState:
     """
     A 3×5 grid of cells for one player.
     Access via board[row][col]; both indices are 0-based.
-    Row 0 = back row, row 4 = front row (nearest monster path).
-    Col 0 = left, col 2 = right.
+    Row 0 = back row, row 2 = front row (nearest monster path).
+    Col 0 = left, col 4 = right.
     """
     cells: list[list[Optional[UnitCell]]] = field(
-        default_factory=lambda: [[None] * 3 for _ in range(5)]
+        default_factory=lambda: [[None] * 5 for _ in range(3)]
     )
 
     def get(self, row: int, col: int) -> Optional[UnitCell]:
@@ -78,8 +78,8 @@ class BoardState:
         """Returns list of (row, col, UnitCell) for all non-empty cells."""
         return [
             (r, c, self.cells[r][c])
-            for r in range(5)
-            for c in range(3)
+            for r in range(3)
+            for c in range(5)
             if self.cells[r][c] is not None
         ]
 
