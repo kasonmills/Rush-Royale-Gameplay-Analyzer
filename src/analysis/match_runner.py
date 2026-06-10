@@ -54,6 +54,7 @@ from src.database.match_history_repo import MatchRepo, SnapshotRepo, UnitPerform
 from src.database.summon_repo import SummonRepo
 from src.recognition.hero_classifier import HeroClassifier
 from src.recognition.ocr_reader import OCRReader
+from src.recognition.rank_detector import RankDetector
 from src.recognition.talent_classifier import TalentClassifier
 from src.recognition.template_matcher import TemplateMatcher
 
@@ -299,6 +300,7 @@ class MatchRunner:
         self._matcher:   Optional[TemplateMatcher]  = None
         self._talent:    Optional[TalentClassifier] = None
         self._hero:      Optional[HeroClassifier]   = None
+        self._rank_det:  RankDetector = RankDetector()
         self._ocr:       OCRReader = OCRReader()
         self._predictor: WinPredictor = WinPredictor()
 
@@ -387,7 +389,8 @@ class MatchRunner:
 
             # Build MCR and session
             mcr     = MatchContextResolver(self._matcher, self._talent,
-                                           self._hero, self._ocr)
+                                           self._hero, self._ocr,
+                                           rank_detector=self._rank_det)
             session = mcr.start_match(match_id)
 
             # Open DB connections for the duration of the loop

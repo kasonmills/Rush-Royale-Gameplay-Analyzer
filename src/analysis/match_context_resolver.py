@@ -73,6 +73,7 @@ from src.capture.grid_calibrator import GridCalibrator
 from src.recognition.animation_detector import AnimationDetector
 from src.recognition.hero_classifier import HeroClassifier
 from src.recognition.ocr_reader import OCRReader
+from src.recognition.rank_detector import RankDetector
 from src.recognition.talent_classifier import TalentClassifier
 from src.recognition.template_matcher import MatchResult, TemplateMatcher
 from src.recognition.unit_classifier import UnitClassifier
@@ -176,13 +177,15 @@ class MatchContextResolver:
                  hero_classifier: HeroClassifier,
                  ocr_reader: OCRReader,
                  animation_detector: Optional[AnimationDetector] = None,
-                 unit_classifier: Optional[UnitClassifier] = None):
+                 unit_classifier: Optional[UnitClassifier] = None,
+                 rank_detector: Optional[RankDetector] = None):
         self._matcher    = matcher
         self._talent     = talent_classifier
         self._hero       = hero_classifier
         self._ocr        = ocr_reader
         self._animations = animation_detector
         self._classifier = unit_classifier
+        self._rank_det   = rank_detector
 
     # ------------------------------------------------------------------
     # Public API
@@ -355,13 +358,24 @@ class MatchContextResolver:
                         confidence=clf.confidence,
                     ))
 
+        crops_by_key = {(p, r, c): crop for p, r, c, crop in all_crops}
+
         for player, row, col, match in cell_results:
             if match.is_empty or match.unit_id is None:
                 continue
 
+            # Shape-based rank detection — overrides template rank when available.
+            # The border polygon is independent of unit artwork, so this is
+            # reliable as soon as the cell is clearly cropped.
+            rank_from_template = match.merge_rank or 1
+            if self._rank_det is not None:
+                crop = crops_by_key.get((player, row, col))
+                detected_rank = self._rank_det.detect(crop) if crop is not None else None
+                rank_from_template = detected_rank if detected_rank is not None else rank_from_template
+
             # Stage 2 special case — rank cap enforcement
             rank = self._apply_rank_cap(
-                match.unit_id, match.merge_rank or 1, session, db_conn
+                match.unit_id, rank_from_template, session, db_conn
             )
 
             # Stage 3 — talent path for this cell
