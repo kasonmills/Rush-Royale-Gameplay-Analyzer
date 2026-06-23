@@ -237,7 +237,7 @@ CREATE TABLE IF NOT EXISTS game_state_snapshots (
     wave_number         INTEGER,
     player_hp           INTEGER,
     opponent_hp         INTEGER,
-    player_mana         INTEGER,
+    summon_ready        INTEGER,               -- 1 = yellow/active, 0 = gray/blocked
     player_board        TEXT,               -- JSON: [{cell, unit_id, rank, talent_tier, variant}]
     opponent_board      TEXT,
     active_buffs        TEXT,               -- JSON array of active animation names per player

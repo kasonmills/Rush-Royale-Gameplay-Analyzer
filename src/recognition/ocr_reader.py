@@ -2,12 +2,16 @@
 OCR reader for HUD numeric elements: wave number.
 Uses pytesseract with per-region pre-processing tuned for the Rush Royale HUD.
 
-Rush Royale PvP HUD layout (portrait orientation, ~1080×2340):
-  - Wave number: "Wave N" text in the centre divider strip between the two boards.
-  - Player HP:   3 red-heart icon sprites to the LEFT of the centre divider strip.
-  - Opponent HP: heart/skull icons to the RIGHT of the centre divider strip.
-  - Player mana: crystal icon sprites along the left edge of the player board
-                 (not yet implemented — always returns None).
+Rush Royale PvP HUD layout (portrait orientation, HUD at y≈42–49%):
+  Left side (x≈0–20%, stacked top-to-bottom):
+    1. Opponent HP  — heart/skull icons  (x=0–20%, y=40–45%)
+    2. Wave number  — digit text         (x=0–10%, y=45–50%)
+  Centre: boss timer countdown box.
+  Right side (x≈65–90%):
+    3. Player HP    — red-heart icons    (right side of HUD)
+  Summon button (x=35–65%, y=85–95%):
+    Yellow/gold = can summon; gray = cannot (no mana or board full).
+    Detected by colour — no OCR needed. Replaces mana tracking.
 
 All region positions are expressed as frame fractions so they scale to any
 stream resolution. The defaults are tuned for a 360×640 portrait scrcpy stream
@@ -30,9 +34,9 @@ Usage:
 
     readings = reader.read(frame)
     print(readings.wave_number)  # e.g. 12  (None if Tesseract unavailable)
-    print(readings.player_hp)    # e.g. 3   (heart count, always available)
     print(readings.opponent_hp)  # e.g. 2   (heart count, always available)
-    print(readings.player_mana)  # None (not yet implemented)
+    print(readings.player_hp)    # e.g. 3   (heart count, always available)
+    print(readings.summon_ready)  # True = yellow button, False = gray button
 """
 
 import os
@@ -80,23 +84,22 @@ _MIN_HEART_AREA = 50
 
 # ---------------------------------------------------------------------------
 # HUD region definitions — (left_frac, top_frac, right_frac, bottom_frac)
-# Calibrated from reference footage (360×640 portrait).
-# All regions are in the centre divider strip between the two boards
-# (vertically: ~43–50% of frame height).
+# Calibrated from reference diagram (360×640 portrait).
+# HUD strip is vertically ~40–56% of frame height.
+# All three readings are stacked in the LEFT column of the HUD strip.
 # ---------------------------------------------------------------------------
 
-# "Wave N" text in the centre divider strip between the two boards.
-_WAVE_REGION = (0.28, 0.43, 0.60, 0.49)
+# Opponent castle HP: heart/skull icons (x=0–20%, y=40–45%; ±5% buffer).
+_OPP_HP_REGION = (0.00, 0.35, 0.25, 0.50)
 
-# Player castle HP: red heart icons left of centre in the divider strip.
-_PLAYER_HP_REGION = (0.02, 0.43, 0.28, 0.50)
+# Wave number digit (x=0–10%, y=45–50%; ±5% buffer).
+_WAVE_REGION = (0.00, 0.40, 0.15, 0.55)
 
-# Opponent castle HP: heart/skull icons right of centre — capped at 0.90
-# to stay inside the game area (rightmost ~10% is hero portrait sidebar).
-_OPP_HP_REGION = (0.58, 0.43, 0.90, 0.50)
+# Player castle HP: red heart icons — RIGHT side of HUD (x=65–90%, y=40–50%; ±5% buffer).
+_PLAYER_HP_REGION = (0.60, 0.35, 0.95, 0.55)
 
-# Player mana: crystal icon sprites along the left edge of the player board.
-_PLAYER_MANA_REGION = (0.00, 0.49, 0.07, 0.72)
+# Summon button: yellow/gold = ready to summon, gray = blocked (x=35–65%, y=85–95%; ±5% buffer).
+_SUMMON_BTN_REGION = (0.30, 0.80, 0.70, 1.00)
 
 
 @dataclass
@@ -105,24 +108,26 @@ class HUDLayout:
     HUD region fractions (left, top, right, bottom) for each detection target.
     Pass a custom instance to OCRReader to adapt to a different layout.
     """
-    wave:        tuple[float, float, float, float] = _WAVE_REGION
-    player_hp:   tuple[float, float, float, float] = _PLAYER_HP_REGION
-    opponent_hp: tuple[float, float, float, float] = _OPP_HP_REGION
-    player_mana: tuple[float, float, float, float] = _PLAYER_MANA_REGION
+    wave:          tuple[float, float, float, float] = _WAVE_REGION
+    player_hp:     tuple[float, float, float, float] = _PLAYER_HP_REGION
+    opponent_hp:   tuple[float, float, float, float] = _OPP_HP_REGION
+    summon_button: tuple[float, float, float, float] = _SUMMON_BTN_REGION
 
 
 @dataclass
 class HUDReadings:
     """
     Values read from the HUD in a single frame.
-    wave_number: None if Tesseract is unavailable or OCR failed.
+    wave_number:  None if Tesseract is unavailable or OCR failed.
     player_hp / opponent_hp: heart count (0–3); None only if crop is empty.
-    player_mana: always None (not yet implemented).
+    summon_ready: True = button is yellow/gold (can summon),
+                  False = button is gray (no mana or board full),
+                  None = crop empty.
     """
-    wave_number:  Optional[int] = None
-    player_hp:    Optional[int] = None
-    opponent_hp:  Optional[int] = None
-    player_mana:  Optional[int] = None
+    wave_number:  Optional[int]  = None
+    player_hp:    Optional[int]  = None
+    opponent_hp:  Optional[int]  = None
+    summon_ready: Optional[bool] = None
 
 
 def _find_tesseract() -> Optional[str]:
@@ -164,12 +169,17 @@ class OCRReader:
                 text is dark on a light background). Default False.
     """
 
-    def __init__(self, layout: HUDLayout = HUDLayout(), invert: bool = False):
+    def __init__(self, layout: HUDLayout = HUDLayout(), invert: bool = False,
+                 tesseract_cmd: Optional[str] = None):
         self.layout = layout
         self.invert = invert
-        self._tesseract_path: Optional[str] = _find_tesseract()
-        if self._tesseract_path and _pytesseract_mod is not None:
-            _pytesseract_mod.pytesseract.tesseract_cmd = self._tesseract_path
+        if tesseract_cmd is not None and _pytesseract_mod is not None:
+            _pytesseract_mod.pytesseract.tesseract_cmd = tesseract_cmd
+            self._tesseract_path: Optional[str] = tesseract_cmd
+        else:
+            self._tesseract_path = _find_tesseract()
+            if self._tesseract_path and _pytesseract_mod is not None:
+                _pytesseract_mod.pytesseract.tesseract_cmd = self._tesseract_path
 
     @property
     def available(self) -> bool:
@@ -191,7 +201,7 @@ class OCRReader:
             wave_number=self._read_wave(frame) if self.available else None,
             player_hp=self._count_hp(frame, self.layout.player_hp),
             opponent_hp=self._count_hp(frame, self.layout.opponent_hp),
-            player_mana=None,
+            summon_ready=self._check_summon_ready(frame),
         )
 
     def read_wave(self, frame: np.ndarray) -> Optional[int]:
@@ -211,9 +221,12 @@ class OCRReader:
             self._count_hp(frame, self.layout.opponent_hp),
         )
 
-    def read_mana(self, frame: np.ndarray) -> Optional[int]:
-        """Read player mana. Not yet implemented — always returns None."""
-        return None
+    def read_summon_ready(self, frame: np.ndarray) -> Optional[bool]:
+        """
+        Check if the summon button is active.
+        Returns True (yellow = can summon), False (gray = blocked), or None.
+        """
+        return self._check_summon_ready(frame)
 
     def crop_region(self, frame: np.ndarray,
                     region: tuple[float, float, float, float]) -> np.ndarray:
@@ -232,6 +245,10 @@ class OCRReader:
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
+
+    def _check_summon_ready(self, frame: np.ndarray) -> Optional[bool]:
+        crop = self.crop_region(frame, self.layout.summon_button)
+        return _is_summon_ready(crop)
 
     def _read_wave(self, frame: np.ndarray) -> Optional[int]:
         raw = self._read_region(frame, self.layout.wave)
@@ -255,6 +272,27 @@ class OCRReader:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+# Fraction of pixels in the summon button crop that must be yellow/gold
+# for the button to be considered active (ready to summon).
+_MIN_YELLOW_FRACTION = 0.15
+
+
+def _is_summon_ready(crop: np.ndarray) -> Optional[bool]:
+    """
+    Returns True if the summon button is yellow/gold (player can summon),
+    False if it is gray (no mana or board full), None if the crop is empty.
+
+    Yellow detection uses HSV hue 15–40° with minimum saturation/value so
+    neutral UI elements and dark shadows are excluded.
+    """
+    if crop.size == 0:
+        return None
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, np.array([15, 80, 80]), np.array([40, 255, 255]))
+    yellow_frac = np.count_nonzero(mask) / mask.size
+    return yellow_frac >= _MIN_YELLOW_FRACTION
+
 
 def _validate_range(value: Optional[int], lo: int, hi: int) -> Optional[int]:
     """Return value if lo ≤ value ≤ hi, else None."""

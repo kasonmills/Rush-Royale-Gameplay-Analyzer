@@ -550,12 +550,12 @@ class MatchContextResolver:
     # ------------------------------------------------------------------
 
     def _process_hud(self, frame, state: GameState) -> None:
-        """Read wave, HP, and mana from the HUD."""
+        """Read wave, HP, and summon button state from the HUD."""
         readings = self._ocr.read(frame)
         state.wave_number  = readings.wave_number
         state.player_hp    = readings.player_hp
         state.opponent_hp  = readings.opponent_hp
-        state.player_mana  = readings.player_mana
+        state.summon_ready = readings.summon_ready
 
 
 # ---------------------------------------------------------------------------

@@ -2,13 +2,12 @@
 Hero portrait classifier — identifies which hero each player has equipped
 by matching the HUD portrait region against reference images.
 
-Rush Royale PvP HUD layout (portrait orientation):
-  - Both players' hero portraits are visible throughout the match.
-  - Player portrait: lower HUD area, to the left of the player's HP bar.
-  - Opponent portrait: upper HUD area, to the left of the opponent's HP bar.
+Rush Royale PvP layout (portrait orientation):
+  - Player hero portrait: FAR RIGHT of the player deck strip (y≈91–100%).
+  - Opponent hero portrait: FAR RIGHT of the opponent deck strip (y≈0–5%).
 
 The portrait is a small icon (roughly square). Default region fractions
-are tuned for a 1080×2340 scrcpy portrait stream and can be overridden
+are tuned for a 360×640 scrcpy portrait stream and can be overridden
 by passing a custom HUDRegions instance.
 
 Reference images live in:
@@ -45,19 +44,19 @@ import numpy as np
 CONFIDENCE_THRESHOLD = 0.55
 
 # ---------------------------------------------------------------------------
-# HUD portrait region — fractions of (frame_width, frame_height)
-# Calibrated from reference footage (360×640).
-# Hero icons sit in the RIGHT sidebar (~81–100% of width):
-#   player hero  — bottom-right corner
-#   opponent hero — top-right corner
+# Hero portrait region — fractions of (frame_width, frame_height)
+# Calibrated from reference diagram (360×640 portrait stream).
+# Hero icons appear at the FAR RIGHT of each player's respective strip:
+#   player hero   — rightmost slot of the player summon strip  (y≈82–90%)
+#   opponent hero — rightmost slot of the opponent deck strip  (y≈0–9%)
 # Each region is (left_frac, top_frac, right_frac, bottom_frac).
 # ---------------------------------------------------------------------------
 
-# Player portrait: bottom-right corner of the frame
-_PLAYER_PORTRAIT = (0.81, 0.88, 1.00, 1.00)
+# Player hero: far-right of player deck strip (x=80–97%, y=90–100%; ±5% buffer).
+_PLAYER_PORTRAIT = (0.75, 0.85, 1.00, 1.00)
 
-# Opponent portrait: top-right corner of the frame
-_OPP_PORTRAIT    = (0.81, 0.00, 1.00, 0.064)
+# Opponent hero: far-right of opponent deck strip (x=80–95%, y=5–15%; ±5% buffer).
+_OPP_PORTRAIT    = (0.75, 0.00, 1.00, 0.20)
 
 
 @dataclass

@@ -101,10 +101,12 @@ class GameState:
     timestamp_sec: float = 0.0        # seconds into the match / video
     wave_number: Optional[int] = None
 
-    # Health / resources
+    # Health
     player_hp: Optional[int] = None
     opponent_hp: Optional[int] = None
-    player_mana: Optional[int] = None
+
+    # Summon button state: True = yellow/active, False = gray/blocked, None = unknown
+    summon_ready: Optional[bool] = None
 
     # Boards
     player_board: BoardState = field(default_factory=BoardState)
@@ -156,7 +158,7 @@ class GameState:
             "wave_number": self.wave_number,
             "player_hp": self.player_hp,
             "opponent_hp": self.opponent_hp,
-            "player_mana": self.player_mana,
+            "summon_ready": int(self.summon_ready) if self.summon_ready is not None else None,
             "player_board": serialize_board(self.player_board),
             "opponent_board": serialize_board(self.opponent_board),
             "active_buffs": json.dumps(self.active_buffs),

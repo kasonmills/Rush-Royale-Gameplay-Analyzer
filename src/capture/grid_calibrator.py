@@ -1,14 +1,23 @@
 """
 GridCalibrator — defines the 3×5 board grid boundaries in pixel coordinates.
 
-Rush Royale PvP layout (portrait phone screen):
-  - Player board: bottom half of the frame, 3 cols × 5 rows
-  - Opponent board: top half of the frame, 3 cols × 5 rows
-  - Both boards share the same column layout; row order is mirrored
-    (player row 0 = back/bottom, opponent row 0 = back/top)
+Rush Royale PvP layout (portrait phone screen, top → bottom):
+  - Opponent deck strip  (x≈20–70%, y≈5–10%): 5 unit cards; hero icon x≈80–95%
+  - Opponent board       (y≈17–38%): 3 rows × 5 cols of cells
+  - HUD strip            (y≈40–50%): wave # + opp HP (left), boss timer (centre),
+                                     player HP (right)
+  - Player board         (y≈55–75%): 3 rows × 5 cols of cells
+  - Summon button        (y≈85–95%): centred at x≈35–65%
+  - Player deck strip    (y≈90–100%): 5 unit cards (x=0–80%) + hero portrait (right)
+
+  Both boards share x≈15–85%. The 3-sided wooden monster-path border sits
+  outside this range (left wall, top wall, right wall).
+
+  Both boards share the same column layout (left=col 0, right=col 4).
+  Row 0 is always the back row (farthest from the centre HUD strip).
 
 Usage:
-    cal = GridCalibrator.from_defaults(frame_width=1080, frame_height=2340)
+    cal = GridCalibrator.from_defaults(frame_width=360, frame_height=640)
     cell_img = cal.crop_cell(frame, player="player", row=2, col=1)
 
     # Or load a previously saved calibration:
@@ -29,32 +38,43 @@ import numpy as np
 
 
 # ---------------------------------------------------------------------------
-# Default layout constants — calibrated from reference footage (360×640).
-# Rush Royale PvP portrait layout: game boards occupy the left ~75% of width;
-# hero portrait icons sit in the right ~19% alongside a player webcam strip.
-# These fractions are resolution-independent (applied to any frame size).
+# Default layout constants — calibrated from reference diagram (360×640 source).
+# Rush Royale PvP portrait layout:
+#   - Game boards + strips occupy the left ~75% of frame width.
+#   - Right ~25% is hero portrait sidebar / streamer webcam overlay.
+# All fractions are resolution-independent (applied to any frame size).
 # Use GridCalibrator.interactive() to refine for a different device/layout.
 # ---------------------------------------------------------------------------
 
-# Fraction of frame height where each board starts/ends
-_PLAYER_BOARD_TOP_FRAC    = 0.56   # player board top edge
-_PLAYER_BOARD_BOTTOM_FRAC = 0.84   # player board bottom edge
-_OPP_BOARD_TOP_FRAC       = 0.064  # opponent board top edge
-_OPP_BOARD_BOTTOM_FRAC    = 0.345  # opponent board bottom edge
+# --- Board vertical bounds (fraction of frame height) ---
+# Base measurements from 5% ruler grid on reference screenshot; ±5% buffer applied.
+_PLAYER_BOARD_TOP_FRAC    = 0.50   # 0.55 − 5% buffer
+_PLAYER_BOARD_BOTTOM_FRAC = 0.80   # 0.75 + 5% buffer
+_OPP_BOARD_TOP_FRAC       = 0.12   # 0.17 − 5% buffer
+_OPP_BOARD_BOTTOM_FRAC    = 0.43   # 0.38 + 5% buffer
 
-# Deck icon strip — the 5 unit icons always visible below each board.
-# Player deck icons sit just below the player board; opponent deck icons
-# sit just above the opponent board.
-_PLAYER_DECK_TOP_FRAC     = 0.88   # just below player board
-_PLAYER_DECK_BOTTOM_FRAC  = 1.00
-_OPP_DECK_TOP_FRAC        = 0.00   # just above opponent board
-_OPP_DECK_BOTTOM_FRAC     = 0.064
+# --- Board horizontal bounds (same for both boards) ---
+# Cell grid runs x=15–85%; ±5% buffer applied each side.
+_BOARD_LEFT_FRAC  = 0.10   # 0.15 − 5% buffer
+_BOARD_RIGHT_FRAC = 0.90   # 0.85 + 5% buffer
 
-# Fraction of frame width for the board left/right edges.
-# Boards do not extend to the full frame width — the rightmost ~10% is
-# occupied by hero portrait icons and (in some recordings) a webcam strip.
-_BOARD_LEFT_FRAC  = 0.15
-_BOARD_RIGHT_FRAC = 0.90
+# --- Opponent deck strip (x=20–70%, y=5–10%; ±5% buffer) ---
+_OPP_DECK_TOP_FRAC    = 0.00   # 0.05 − 5%, clamped to 0
+_OPP_DECK_BOTTOM_FRAC = 0.15   # 0.10 + 5%
+_OPP_DECK_CARD_LEFT  = 0.15   # 0.20 − 5%
+_OPP_DECK_CARD_RIGHT = 0.75   # 0.70 + 5%
+
+# --- Player Summon button (x=35–65%, y=85–95%; ±5% buffer) ---
+_PLAYER_SUMMON_TOP_FRAC    = 0.80   # 0.85 − 5%
+_PLAYER_SUMMON_BOTTOM_FRAC = 1.00   # 0.95 + 5%, clamped to 1
+_PLAYER_SUMMON_LEFT  = 0.30   # 0.35 − 5%
+_PLAYER_SUMMON_RIGHT = 0.70   # 0.65 + 5%
+
+# --- Player deck strip (x=0–80%, y=90–100%; ±5% buffer) ---
+_PLAYER_DECK_TOP_FRAC    = 0.85   # 0.90 − 5%
+_PLAYER_DECK_BOTTOM_FRAC = 1.00   # already at max
+_PLAYER_DECK_CARD_LEFT  = 0.00   # already at min
+_PLAYER_DECK_CARD_RIGHT = 0.85   # 0.80 + 5%
 
 DECK_SIZE = 5  # Rush Royale decks are always 5 units
 
@@ -87,8 +107,9 @@ class CalibrationData:
     frame_height: int
     player_board: GridRect
     opponent_board: GridRect
-    player_deck: GridRect       # 5-icon strip below the player board
-    opponent_deck: GridRect     # 5-icon strip above the opponent board
+    player_deck: GridRect      # 5 unit card slots at very bottom of screen
+    opponent_deck: GridRect    # 5 unit card slots at very top of screen
+    player_summon: GridRect    # Summon-button strip between board and player deck
     rows: int = 3
     cols: int = 5
 
@@ -124,8 +145,18 @@ class GridCalibrator:
             frame_height=frame_height,
             player_board=frac_rect(_PLAYER_BOARD_TOP_FRAC, _PLAYER_BOARD_BOTTOM_FRAC),
             opponent_board=frac_rect(_OPP_BOARD_TOP_FRAC, _OPP_BOARD_BOTTOM_FRAC),
-            player_deck=frac_rect(_PLAYER_DECK_TOP_FRAC, _PLAYER_DECK_BOTTOM_FRAC),
-            opponent_deck=frac_rect(_OPP_DECK_TOP_FRAC, _OPP_DECK_BOTTOM_FRAC),
+            player_deck=frac_rect(
+                _PLAYER_DECK_TOP_FRAC, _PLAYER_DECK_BOTTOM_FRAC,
+                left_f=_PLAYER_DECK_CARD_LEFT, right_f=_PLAYER_DECK_CARD_RIGHT,
+            ),
+            opponent_deck=frac_rect(
+                _OPP_DECK_TOP_FRAC, _OPP_DECK_BOTTOM_FRAC,
+                left_f=_OPP_DECK_CARD_LEFT, right_f=_OPP_DECK_CARD_RIGHT,
+            ),
+            player_summon=frac_rect(
+                _PLAYER_SUMMON_TOP_FRAC, _PLAYER_SUMMON_BOTTOM_FRAC,
+                left_f=_PLAYER_SUMMON_LEFT, right_f=_PLAYER_SUMMON_RIGHT,
+            ),
         )
         return cls(data)
 
@@ -148,6 +179,7 @@ class GridCalibrator:
             opponent_board=_rect("opponent_board"),
             player_deck=_rect("player_deck"),
             opponent_deck=_rect("opponent_deck"),
+            player_summon=_rect("player_summon"),
             rows=raw.get("rows", 3),
             cols=raw.get("cols", 5),
         )
@@ -272,16 +304,25 @@ class GridCalibrator:
     def crop_cell(self, frame: np.ndarray, player: str,
                   row: int, col: int) -> np.ndarray:
         """
-        Crops and returns the image for cell (row, col) on the given player's board.
+        Crops and returns a square image for cell (row, col).
         player: 'player' or 'opponent'
         row: 0 (back) – 2 (front)
         col: 0 (left) – 4 (right)
+
+        The cell slot may be slightly rectangular due to frame aspect ratio.
+        A square crop centred within the slot is returned so that template
+        matching always sees a consistent 1:1 aspect ratio regardless of
+        the native cell dimensions.
         """
         x, y, w, h = self._cell_rect(player, row, col)
-        # Clamp to frame bounds
         fh, fw = frame.shape[:2]
-        x1, y1 = max(0, x), max(0, y)
-        x2, y2 = min(fw, x + w), min(fh, y + h)
+        # Shrink to square centred in the slot
+        side = min(w, h)
+        cx, cy = x + w // 2, y + h // 2
+        x1 = max(0, cx - side // 2)
+        y1 = max(0, cy - side // 2)
+        x2 = min(fw, x1 + side)
+        y2 = min(fh, y1 + side)
         return frame[y1:y2, x1:x2].copy()
 
     def all_cell_crops(self, frame: np.ndarray
@@ -301,22 +342,25 @@ class GridCalibrator:
     def crop_deck_icons(self, frame: np.ndarray,
                         player: str) -> list[np.ndarray]:
         """
-        Crops and returns the 5 deck icon images for the given player.
+        Crops and returns the 5 unit deck icon images for the given player.
         player: 'player' or 'opponent'
 
-        The deck strip is divided into DECK_SIZE equal slots horizontally.
-        Returns a list of DECK_SIZE BGR images, one per deck slot.
+        The deck rect covers only the 5 unit card slots (hero/spell icons are
+        outside this rect). Slots are divided into DECK_SIZE equal columns.
+
+        Returns a list of DECK_SIZE BGR images ordered left-to-right.
         """
-        rect = (self._data.player_deck if player == "player"
-                else self._data.opponent_deck)
+        strip = (self._data.player_deck if player == "player"
+                 else self._data.opponent_deck)
         fh, fw = frame.shape[:2]
-        slot_w = rect.w // DECK_SIZE
-        icons = []
+        y1 = max(0, strip.y)
+        y2 = min(fh, strip.y + strip.h)
+        slot_w = max(1, strip.w // DECK_SIZE)
+
+        icons: list[np.ndarray] = []
         for i in range(DECK_SIZE):
-            x1 = max(0, rect.x + i * slot_w)
-            y1 = max(0, rect.y)
+            x1 = max(0, strip.x + i * slot_w)
             x2 = min(fw, x1 + slot_w)
-            y2 = min(fh, rect.y + rect.h)
             icons.append(frame[y1:y2, x1:x2].copy())
         return icons
 

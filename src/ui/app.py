@@ -712,7 +712,7 @@ class MainWindow(QMainWindow):
         self._wave_lbl  = _hud("Wave")
         self._php_lbl   = _hud("Player HP")
         self._ohp_lbl   = _hud("Opp HP")
-        self._mana_lbl  = _hud("Mana")
+        self._summon_lbl = _hud("Summon")
         self._conf_lbl  = _hud("Confidence")
         self._frame_lbl = _hud("Frames")
         return box
@@ -962,7 +962,7 @@ class MainWindow(QMainWindow):
         self._update_prob_bar(0.5)
         # Clear HUD placeholders
         for lbl in (self._wave_lbl, self._php_lbl, self._ohp_lbl,
-                    self._mana_lbl, self._conf_lbl, self._frame_lbl):
+                    self._summon_lbl, self._conf_lbl, self._frame_lbl):
             lbl.setText(lbl.text().split(":")[0] + ": —")
         self._hist_detail_box.setVisible(False)
         self._set_status("Running…  (no sprites = board shows unit IDs; recognition stubs active)")
@@ -1002,7 +1002,8 @@ class MainWindow(QMainWindow):
         self._wave_lbl.setText(f"Wave: {state.wave_number or '—'}")
         self._php_lbl.setText(f"Player HP: {state.player_hp if state.player_hp is not None else '—'}")
         self._ohp_lbl.setText(f"Opp HP: {state.opponent_hp if state.opponent_hp is not None else '—'}")
-        self._mana_lbl.setText(f"Mana: {state.player_mana if state.player_mana is not None else '—'}")
+        summon_txt = {True: "Ready", False: "Blocked", None: "—"}[state.summon_ready]
+        self._summon_lbl.setText(f"Summon: {summon_txt}")
         self._conf_lbl.setText(f"Confidence: {state.pipeline_confidence:.0%}")
         self._frame_lbl.setText(f"Frames: {state.source_frame_index or 0}")
 
@@ -1383,7 +1384,7 @@ class MainWindow(QMainWindow):
         self._wave_lbl.setText("Wave: 12")
         self._php_lbl.setText("Player HP: 3")
         self._ohp_lbl.setText("Opp HP: 2")
-        self._mana_lbl.setText("Mana: 180")
+        self._summon_lbl.setText("Summon: Ready")
         self._conf_lbl.setText("Confidence: —")
         self._frame_lbl.setText("Frames: —")
         self._update_prob_bar(0.63)

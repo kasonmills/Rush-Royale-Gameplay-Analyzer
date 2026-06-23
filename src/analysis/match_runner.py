@@ -44,6 +44,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator, Optional
 
+import cv2
+
 from src.analysis.game_state import GameState, BoardState
 from src.analysis.match_context_resolver import MatchContextResolver, MatchSession
 from src.analysis.win_predictor import WinPredictor
@@ -64,6 +66,14 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # Snapshot confidence below which the frame is not written to the DB.
 # The MCR still processes it — this only gates DB persistence.
 _MIN_PERSIST_CONFIDENCE = 0.40
+
+# Recognition confidence below which a cell crop is saved to data/to_label/
+# for later hand-labelling (helps grow the reference library).
+_LOW_CONF_SAVE_THRESHOLD = 0.65
+
+# Minimum seconds between saves for the same (player, unit_id) pair.
+# Prevents flooding the label directory with near-identical crops.
+_LOW_CONF_SAVE_INTERVAL_SEC = 30.0
 
 # A rank-1 unit appearing within this many seconds of a detected merge on
 # the player's board is classified as 'post_merge' rather than 'manual'.
@@ -200,6 +210,15 @@ class MatchRunnerConfig:
     # Calibration
     calibration_path: Optional[Path] = None  # data/calibration.json
 
+    # Low-confidence crop saving — auto-builds the reference library over time
+    save_low_confidence: bool = True         # enable / disable the feature
+    to_label_dir: Optional[Path] = None      # data/to_label/
+
+    # Tesseract path — set if Tesseract is installed in a non-standard location.
+    # When None, OCRReader auto-detects from common Windows paths and PATH.
+    # Example: r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    tesseract_path: Optional[str] = None
+
     # Frame sampling
     sample_every_sec: float = 0.5   # video mode: one frame per this many seconds
     live_fps: float = 5.0           # live mode: capture rate (frames per second)
@@ -231,11 +250,15 @@ class MatchRunnerConfig:
         if self.calibration_path is None:
             self.calibration_path = root / "data" / "calibration.json"
 
+        if self.to_label_dir is None:
+            self.to_label_dir = root / "data" / "to_label"
+
         # Ensure they are Path objects even if the caller passed strings
         self.reference_dir    = Path(self.reference_dir)
         self.talent_icon_dir  = Path(self.talent_icon_dir)
         self.hero_portrait_dir = Path(self.hero_portrait_dir)
         self.calibration_path = Path(self.calibration_path)
+        self.to_label_dir     = Path(self.to_label_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -296,12 +319,16 @@ class MatchRunner:
         self._last_match_id: Optional[str] = None
         self._stop_requested: bool = False
 
+        # Tracks last timestamp a crop was saved per (player, unit_id).
+        # Prevents flooding data/to_label/ with near-identical frames.
+        self._label_last_saved: dict[tuple[str, str], float] = {}
+
         # Recognition modules — populated by _setup_recognizers()
         self._matcher:   Optional[TemplateMatcher]  = None
         self._talent:    Optional[TalentClassifier] = None
         self._hero:      Optional[HeroClassifier]   = None
+        self._ocr:       Optional[OCRReader]        = None
         self._rank_det:  RankDetector = RankDetector()
-        self._ocr:       OCRReader = OCRReader()
         self._predictor: WinPredictor = WinPredictor()
 
     # ------------------------------------------------------------------
@@ -432,6 +459,12 @@ class MatchRunner:
 
                     if on_state is not None:
                         on_state(state)
+
+                    # Auto-save low-confidence crops for later hand-labelling
+                    if cfg.save_low_confidence:
+                        self._save_low_confidence_crops(
+                            frame, calibrator, state, timestamp_sec, match_id
+                        )
 
                     # Throttled snapshot persist
                     if (cfg.persist
@@ -606,6 +639,12 @@ class MatchRunner:
                   f"{cfg.hero_portrait_dir} — hero classification disabled.")
             self._hero._loaded = True
 
+        self._ocr = OCRReader(tesseract_cmd=cfg.tesseract_path)
+        if not self._ocr.available:
+            print("[MatchRunner] WARNING: Tesseract not found — wave OCR disabled. "
+                  "Install Tesseract or set MatchRunnerConfig(tesseract_path=...) "
+                  "to enable wave number reading.")
+
     def _setup_calibrator(self, src) -> Optional[GridCalibrator]:
         """
         Build a GridCalibrator for this stream.
@@ -653,6 +692,50 @@ class MatchRunner:
                 time.sleep(0.1)
             return None
         return None
+
+    # ------------------------------------------------------------------
+    # Low-confidence crop saving
+    # ------------------------------------------------------------------
+
+    def _save_low_confidence_crops(
+            self,
+            frame,
+            calibrator: "GridCalibrator",
+            state: GameState,
+            timestamp_sec: float,
+            match_id: str,
+    ) -> None:
+        """
+        Save a cropped cell image to data/to_label/<unit_id>/ whenever a
+        recognised cell's confidence is below _LOW_CONF_SAVE_THRESHOLD.
+
+        Rate-limited to _LOW_CONF_SAVE_INTERVAL_SEC per (player, unit_id) pair
+        so a single uncertain unit doesn't produce hundreds of near-identical
+        files across a match.
+
+        Files are named:
+            <match_id[:8]>_t<timestamp>_<player>_r<row>c<col>.png
+        """
+        cfg = self._config
+        for side, board in (("player", state.player_board),
+                            ("opponent", state.opponent_board)):
+            for row, col, cell in board.occupied():
+                if cell.recognition_confidence >= _LOW_CONF_SAVE_THRESHOLD:
+                    continue
+
+                key = (side, cell.unit_id)
+                last_ts = self._label_last_saved.get(key, -_LOW_CONF_SAVE_INTERVAL_SEC)
+                if timestamp_sec - last_ts < _LOW_CONF_SAVE_INTERVAL_SEC:
+                    continue
+
+                crop = calibrator.crop_cell(frame, side, row, col)
+                unit_dir = cfg.to_label_dir / (cell.unit_id or "unknown")
+                unit_dir.mkdir(parents=True, exist_ok=True)
+
+                fname = (f"{match_id[:8]}_t{timestamp_sec:.1f}"
+                         f"_{side}_r{row}c{col}.png")
+                cv2.imwrite(str(unit_dir / fname), crop)
+                self._label_last_saved[key] = timestamp_sec
 
     # ------------------------------------------------------------------
     # Frame iteration
