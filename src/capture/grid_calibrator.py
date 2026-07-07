@@ -47,34 +47,33 @@ import numpy as np
 # ---------------------------------------------------------------------------
 
 # --- Board vertical bounds (fraction of frame height) ---
-# Base measurements from 5% ruler grid on reference screenshot; ±5% buffer applied.
-_PLAYER_BOARD_TOP_FRAC    = 0.50   # 0.55 − 5% buffer
-_PLAYER_BOARD_BOTTOM_FRAC = 0.80   # 0.75 + 5% buffer
-_OPP_BOARD_TOP_FRAC       = 0.12   # 0.17 − 5% buffer
-_OPP_BOARD_BOTTOM_FRAC    = 0.43   # 0.38 + 5% buffer
+# Ground-truthed from grid_ruler_reference.png (720x1616 phone recording).
+_PLAYER_BOARD_TOP_FRAC    = 0.57
+_PLAYER_BOARD_BOTTOM_FRAC = 0.75
+_OPP_BOARD_TOP_FRAC       = 0.18
+_OPP_BOARD_BOTTOM_FRAC    = 0.36
 
 # --- Board horizontal bounds (same for both boards) ---
-# Cell grid runs x=15–85%; ±5% buffer applied each side.
-_BOARD_LEFT_FRAC  = 0.10   # 0.15 − 5% buffer
-_BOARD_RIGHT_FRAC = 0.90   # 0.85 + 5% buffer
+_BOARD_LEFT_FRAC  = 0.16
+_BOARD_RIGHT_FRAC = 0.84
 
-# --- Opponent deck strip (x=20–70%, y=5–10%; ±5% buffer) ---
-_OPP_DECK_TOP_FRAC    = 0.00   # 0.05 − 5%, clamped to 0
-_OPP_DECK_BOTTOM_FRAC = 0.15   # 0.10 + 5%
-_OPP_DECK_CARD_LEFT  = 0.15   # 0.20 − 5%
-_OPP_DECK_CARD_RIGHT = 0.75   # 0.70 + 5%
+# --- Opponent deck strip (x=18–72%, y=6–11%) ---
+_OPP_DECK_TOP_FRAC    = 0.06
+_OPP_DECK_BOTTOM_FRAC = 0.11
+_OPP_DECK_CARD_LEFT   = 0.18
+_OPP_DECK_CARD_RIGHT  = 0.72
 
-# --- Player Summon button (x=35–65%, y=85–95%; ±5% buffer) ---
-_PLAYER_SUMMON_TOP_FRAC    = 0.80   # 0.85 − 5%
-_PLAYER_SUMMON_BOTTOM_FRAC = 1.00   # 0.95 + 5%, clamped to 1
-_PLAYER_SUMMON_LEFT  = 0.30   # 0.35 − 5%
-_PLAYER_SUMMON_RIGHT = 0.70   # 0.65 + 5%
+# --- Player Summon button (x=38–63%, y=86–92%) — ground-truthed from grid_ruler_reference.png ---
+_PLAYER_SUMMON_TOP_FRAC    = 0.85
+_PLAYER_SUMMON_BOTTOM_FRAC = 0.91
+_PLAYER_SUMMON_LEFT  = 0.38
+_PLAYER_SUMMON_RIGHT = 0.63
 
-# --- Player deck strip (x=0–80%, y=90–100%; ±5% buffer) ---
-_PLAYER_DECK_TOP_FRAC    = 0.85   # 0.90 − 5%
-_PLAYER_DECK_BOTTOM_FRAC = 1.00   # already at max
-_PLAYER_DECK_CARD_LEFT  = 0.00   # already at min
-_PLAYER_DECK_CARD_RIGHT = 0.85   # 0.80 + 5%
+# --- Player deck strip (x=3–78%, y=92–98%) ---
+_PLAYER_DECK_TOP_FRAC    = 0.92
+_PLAYER_DECK_BOTTOM_FRAC = 0.98
+_PLAYER_DECK_CARD_LEFT   = 0.03
+_PLAYER_DECK_CARD_RIGHT  = 0.78
 
 DECK_SIZE = 5  # Rush Royale decks are always 5 units
 

@@ -10,6 +10,7 @@ from pathlib import Path
 from .schema import ALL_DDL
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+_DB_DIR  = DATA_DIR / "sheet_exports"
 
 
 def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
@@ -43,9 +44,9 @@ def _migrate(conn: sqlite3.Connection):
 
 
 def init_all():
-    DATA_DIR.mkdir(exist_ok=True)
+    _DB_DIR.mkdir(parents=True, exist_ok=True)
     for db_name, ddl in ALL_DDL.items():
-        db_path = DATA_DIR / f"{db_name}.db"
+        db_path = _DB_DIR / f"{db_name}.db"
         conn = sqlite3.connect(db_path)
         conn.executescript(ddl)
         if db_name == "unit_meta":

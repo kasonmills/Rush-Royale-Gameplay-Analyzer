@@ -23,8 +23,8 @@ SCREENSHOTS_DIR = PROJECT_ROOT / "data" / "screenshots"
 UNITS_DIR       = SCREENSHOTS_DIR / "units"
 HERO_REF_DIR    = PROJECT_ROOT / "assets" / "reference" / "hero_portraits"
 UNIT_REF_DIR    = PROJECT_ROOT / "assets" / "reference"
-DB_PATH         = PROJECT_ROOT / "data" / "unit_meta.db"
-UNITS_CSV       = PROJECT_ROOT / "data" / "Units Master.csv"
+DB_PATH         = PROJECT_ROOT / "data" / "sheet_exports" / "unit_meta.db"
+UNITS_CSV       = PROJECT_ROOT / "data" / "sheet_exports" / "Units Master.csv"
 
 
 def load_hero_ids() -> dict[str, str]:

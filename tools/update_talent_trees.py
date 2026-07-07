@@ -1,6 +1,6 @@
 import csv, io
 
-path = r'data/Talent Trees.csv'
+path = r'data/sheet_exports/Talent Trees.csv'
 
 with open(path, 'r', encoding='utf-8', newline='') as f:
     content = f.read()

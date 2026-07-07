@@ -18,6 +18,11 @@ data/*.db
 # Sheet CSV exports ARE committed as research snapshots
 # (data/sheet_exports/*.csv go into git)
 
+# Video files — too large for GitHub (>100 MB), kept locally only
+*.mp4
+*.mov
+*.avi
+
 # APK / OBB source files
 *.apk
 *.obb

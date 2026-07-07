@@ -86,7 +86,7 @@ def load_csv(filename: str) -> list[dict] | None:
     if not path.exists():
         fallback_name = _DATA_FALLBACK.get(filename)
         if fallback_name:
-            path = DATA_DIR / fallback_name
+            path = EXPORTS_DIR / fallback_name
     if not path.exists():
         return None
 

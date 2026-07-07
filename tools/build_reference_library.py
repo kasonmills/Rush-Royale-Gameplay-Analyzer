@@ -20,7 +20,7 @@ from PIL import Image
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SCREENSHOTS_DIR = PROJECT_ROOT / "data" / "screenshots" / "units"
 REFERENCE_DIR   = PROJECT_ROOT / "assets" / "reference"
-UNITS_CSV       = PROJECT_ROOT / "data" / "Units Master.csv"
+UNITS_CSV       = PROJECT_ROOT / "data" / "sheet_exports" / "Units Master.csv"
 
 # Manual overrides: screenshot stem (lowercase) -> unit_id
 # Used when a filename can't be matched to a CSV display name automatically.

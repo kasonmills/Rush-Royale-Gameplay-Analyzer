@@ -40,6 +40,26 @@ CREATE TABLE IF NOT EXISTS hero_portrait_reference (
     game_version        TEXT,
     captured            INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS artifact_board_reference (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    artifact_id     TEXT    NOT NULL,
+    visual_state    TEXT    NOT NULL DEFAULT 'active',
+    file_path       TEXT,
+    game_version    TEXT,
+    captured        INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(artifact_id, visual_state)
+);
+
+CREATE TABLE IF NOT EXISTS hero_board_effect_reference (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    hero_id         TEXT    NOT NULL,
+    effect_name     TEXT    NOT NULL,
+    file_path       TEXT,
+    game_version    TEXT,
+    captured        INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(hero_id, effect_name)
+);
 """
 
 # ---------------------------------------------------------------------------

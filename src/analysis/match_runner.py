@@ -54,6 +54,7 @@ from src.capture.screen_capture import ScrcpyCapture, WindowCapture
 from src.capture.video_capture import VideoCapture
 from src.database.match_history_repo import MatchRepo, SnapshotRepo, UnitPerformanceRepo
 from src.database.summon_repo import SummonRepo
+from src.recognition.board_effect_classifier import BoardEffectClassifier
 from src.recognition.hero_classifier import HeroClassifier
 from src.recognition.ocr_reader import OCRReader
 from src.recognition.rank_detector import RankDetector
@@ -137,6 +138,16 @@ class ActivityMonitor:
         self._last_ohp:      Optional[int]       = None
         self._last_activity: float               = -1.0   # wall timestamp
 
+        # Guard against false match_end_hp on loading/results screens:
+        # only allow HP-zero to fire after we've seen at least one frame
+        # with HP > 0 on each side.
+        self._player_hp_seen: bool = False
+        self._opp_hp_seen:    bool = False
+
+        # Guard against idle_empty_board firing on the opening loading screen:
+        # only start the empty-board timer after units have appeared at least once.
+        self._units_ever_seen: bool = False
+
     def update(self, state: "GameState", ts: float) -> str:
         """
         Call once per frame with the current GameState and its timestamp.
@@ -148,20 +159,32 @@ class ActivityMonitor:
           'match_end_hp'      — HP dropped to 0 (definitive end)
         """
         # ── HP zero ──────────────────────────────────────────────────
-        if (state.player_hp is not None and state.player_hp == 0) or \
-           (state.opponent_hp is not None and state.opponent_hp == 0):
-            return "match_end_hp"
+        # Update "seen" flags first so a single positive reading arms the check.
+        if state.player_hp is not None and state.player_hp > 0:
+            self._player_hp_seen = True
+        if state.opponent_hp is not None and state.opponent_hp > 0:
+            self._opp_hp_seen = True
+
+        # Only fire once we've confirmed each side had hearts (avoids firing
+        # on opening loading screens or end-match result screens where the
+        # HP region contains no red pixels and reads as 0).
+        if self._player_hp_seen and self._opp_hp_seen:
+            if (state.player_hp is not None and state.player_hp == 0) or \
+               (state.opponent_hp is not None and state.opponent_hp == 0):
+                return "match_end_hp"
 
         occupied = state.player_board.occupied()
 
         # ── Empty-board check ─────────────────────────────────────────
-        if len(occupied) == 0:
+        if len(occupied) > 0:
+            self._units_ever_seen = True
+            self._empty_since = None
+        elif self._units_ever_seen:
+            # Only start the idle timer after gameplay has begun
             if self._empty_since is None:
                 self._empty_since = ts
             elif ts - self._empty_since >= self._empty_sec:
                 return "idle_empty_board"
-        else:
-            self._empty_since = None
 
         # ── Dual activity check ───────────────────────────────────────
         fp = _board_fingerprint(state.player_board)
@@ -324,9 +347,10 @@ class MatchRunner:
         self._label_last_saved: dict[tuple[str, str], float] = {}
 
         # Recognition modules — populated by _setup_recognizers()
-        self._matcher:   Optional[TemplateMatcher]  = None
-        self._talent:    Optional[TalentClassifier] = None
-        self._hero:      Optional[HeroClassifier]   = None
+        self._matcher:   Optional[TemplateMatcher]       = None
+        self._talent:    Optional[TalentClassifier]      = None
+        self._hero:      Optional[HeroClassifier]        = None
+        self._effect_clf: Optional[BoardEffectClassifier] = None
         self._ocr:       Optional[OCRReader]        = None
         self._rank_det:  RankDetector = RankDetector()
         self._predictor: WinPredictor = WinPredictor()
@@ -639,6 +663,9 @@ class MatchRunner:
                   f"{cfg.hero_portrait_dir} — hero classification disabled.")
             self._hero._loaded = True
 
+        self._effect_clf = BoardEffectClassifier()
+        self._effect_clf.load(cfg.reference_dir)
+
         self._ocr = OCRReader(tesseract_cmd=cfg.tesseract_path)
         if not self._ocr.available:
             print("[MatchRunner] WARNING: Tesseract not found — wave OCR disabled. "
@@ -729,6 +756,13 @@ class MatchRunner:
                     continue
 
                 crop = calibrator.crop_cell(frame, side, row, col)
+
+                # Skip saves for known empty-tile visuals (hero skill / artifact
+                # background cells with no unit present).
+                if (self._effect_clf is not None
+                        and self._effect_clf.is_empty_tile(crop)):
+                    continue
+
                 unit_dir = cfg.to_label_dir / (cell.unit_id or "unknown")
                 unit_dir.mkdir(parents=True, exist_ok=True)
 

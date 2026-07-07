@@ -13,12 +13,13 @@ from contextlib import contextmanager
 from pathlib import Path
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+_DB_DIR  = DATA_DIR / "sheet_exports"
 
 _DB_PATHS = {
-    "unit_meta":        DATA_DIR / "unit_meta.db",
-    "visual_reference": DATA_DIR / "visual_reference.db",
-    "match_history":    DATA_DIR / "match_history.db",
-    "summon_analysis":  DATA_DIR / "summon_analysis.db",
+    "unit_meta":        _DB_DIR / "unit_meta.db",
+    "visual_reference": _DB_DIR / "visual_reference.db",
+    "match_history":    _DB_DIR / "match_history.db",
+    "summon_analysis":  _DB_DIR / "summon_analysis.db",
 }
 
 

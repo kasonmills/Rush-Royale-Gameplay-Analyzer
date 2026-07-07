@@ -52,11 +52,11 @@ CONFIDENCE_THRESHOLD = 0.55
 # Each region is (left_frac, top_frac, right_frac, bottom_frac).
 # ---------------------------------------------------------------------------
 
-# Player hero: far-right of player deck strip (x=80–97%, y=90–100%; ±5% buffer).
-_PLAYER_PORTRAIT = (0.75, 0.85, 1.00, 1.00)
+# Player hero: right of player deck strip (x=79–98%, y=90–99%) — ground-truthed from grid_ruler_reference.png.
+_PLAYER_PORTRAIT = (0.79, 0.90, 0.98, 0.99)
 
-# Opponent hero: far-right of opponent deck strip (x=80–95%, y=5–15%; ±5% buffer).
-_OPP_PORTRAIT    = (0.75, 0.00, 1.00, 0.20)
+# Opponent hero: right of opponent deck strip (x=81–96%, y=5–12%) — ground-truthed from grid_ruler_reference.png.
+_OPP_PORTRAIT    = (0.81, 0.05, 0.96, 0.12)
 
 
 @dataclass

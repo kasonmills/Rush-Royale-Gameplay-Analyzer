@@ -25,17 +25,24 @@ frame_count = [0]
 def on_state(state: GameState):
     frame_count[0] += 1
     n = frame_count[0]
-    if n % 5 == 1 or n <= 3:   # print first 3 frames and every 5th after
-        occ_p = len(list(state.player_board.occupied()))
-        occ_o = len(list(state.opponent_board.occupied()))
+    occ_p = list(state.player_board.occupied())
+    occ_o = list(state.opponent_board.occupied())
+    any_recognized = occ_p or occ_o
+    if n % 5 == 1 or n <= 3 or any_recognized:
         print(
             f"  frame {n:3d} | t={state.timestamp_sec:5.1f}s"
             f" | wave={state.wave_number!s:>3}"
             f" | php={state.player_hp!s:>2} ohp={state.opponent_hp!s:>2}"
-            f" | board: {occ_p}p / {occ_o}o cells occupied"
+            f" | board: {len(occ_p)}p / {len(occ_o)}o cells occupied"
             f" | conf={state.pipeline_confidence:.2f}"
             f" | win_prob={state.win_probability!s}"
         )
+        for r, c, cell in occ_p:
+            print(f"    [player  r{r}c{c}] {cell.unit_id}  rank={cell.merge_rank}"
+                  f"  appearance={cell.appearance_state}  conf={cell.recognition_confidence:.2f}")
+        for r, c, cell in occ_o:
+            print(f"    [opponent r{r}c{c}] {cell.unit_id}  rank={cell.merge_rank}"
+                  f"  appearance={cell.appearance_state}  conf={cell.recognition_confidence:.2f}")
 
 print(f"[dry_run] Video: {VIDEO}")
 print(f"[dry_run] Sampling every {cfg.sample_every_sec}s, persist=False\n")

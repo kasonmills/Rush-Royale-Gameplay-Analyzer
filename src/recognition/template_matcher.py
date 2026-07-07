@@ -33,12 +33,15 @@ Usage:
     print(result.unit_id, result.merge_rank, result.confidence)
 """
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 import cv2
 import numpy as np
+
+from src.recognition.shape_detector import detect_merge_rank
 
 
 # Minimum NCC score to accept a board cell match.
@@ -67,6 +70,7 @@ class _TemplateEntry:
     merge_rank: int
     appearance_state: str
     variant_tag: Optional[str]
+    is_toplevel: bool = True   # False when loaded from a subfolder
     images: dict[int, np.ndarray] = field(default_factory=dict)
 
 
@@ -83,9 +87,13 @@ class TemplateMatcher:
 
     def __init__(self,
                  cell_threshold: float = CELL_CONFIDENCE_THRESHOLD,
-                 deck_icon_threshold: float = DECK_ICON_THRESHOLD):
+                 deck_icon_threshold: float = DECK_ICON_THRESHOLD,
+                 use_rotation: bool = False,
+                 use_shape_mask: bool = False):
         self.cell_threshold = cell_threshold
         self.deck_icon_threshold = deck_icon_threshold
+        self.use_rotation = use_rotation
+        self.use_shape_mask = use_shape_mask
         self._templates: list[_TemplateEntry] = []
         self._index: dict[str, list[_TemplateEntry]] = {}  # unit_id → entries
         self._loaded = False
@@ -98,13 +106,27 @@ class TemplateMatcher:
         """
         Loads reference images from the visual reference library.
 
-        Expected directory layout (produced by tools/extract_assets.py):
-          <reference_dir>/
+        Directory layout — both flat and subfolder structures are supported:
+
+          Flat (existing):
             <unit_id>/
               <appearance_state>_rank<N>[_<variant>].png
-              e.g.  base_rank1.png
-                    max_level_rank7.png
-                    reincarnation_1_rank7_moon.png
+              e.g.  base_rank1.png  max_rank7.png  active_rank_1.png
+
+          Subfolder (branch-organised):
+            <unit_id>/
+              rank<N>.png              ← toplevel: base / most-common state
+              <branch>/
+                rank<N>[_<variant>].png
+
+          When a file is inside a subfolder, the folder name is prepended as
+          the appearance-state prefix automatically.  So:
+            cultist/active/rank_1.png  ≡  cultist/active_rank_1.png
+
+          Matching is two-phase: toplevel files are checked first; subfolders
+          are searched only when the toplevel pass does not produce a confident
+          match (>= cell_threshold).  This prunes the search space for the
+          common case where a unit is in its base state.
 
         Missing files are silently skipped.
         """
@@ -122,10 +144,16 @@ class TemplateMatcher:
                 continue
             unit_id = unit_dir.name
 
-            for img_path in sorted(unit_dir.glob("*.png")):
-                entry = _parse_reference_filename(unit_id, img_path)
+            for img_path in sorted(unit_dir.rglob("*.png")):
+                rel        = img_path.relative_to(unit_dir)
+                is_toplevel = rel.parent == Path(".")
+                subdir     = "" if is_toplevel else (
+                    str(rel.parent).replace("\\", "_").replace("/", "_")
+                )
+                entry = _parse_reference_filename(unit_id, img_path, subdir)
                 if entry is None:
                     continue
+                entry.is_toplevel = is_toplevel
                 img = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
                 if img is None:
                     continue
@@ -196,21 +224,45 @@ class TemplateMatcher:
         if _is_empty_cell(cell_crop):
             return MatchResult(is_empty=True)
 
-        templates = (
-            self._templates if unit_ids is None
-            else [t for uid in unit_ids for t in self._index.get(uid, [])]
-        )
-        if not templates:
-            return MatchResult()
+        # Detect the merge-rank shape in the live crop and generate a mask.
+        # When use_shape_mask=False both values are unused (no overhead).
+        if self.use_shape_mask:
+            detected_rank, shape_mask = detect_merge_rank(cell_crop)
+        else:
+            detected_rank, shape_mask = 0, None
 
-        best_score = -1.0
-        best_entry: Optional[_TemplateEntry] = None
+        deck_constrained = unit_ids is not None and len(unit_ids) > 0
 
-        for entry in templates:
-            score = _max_ncc_score(cell_crop, entry)
-            if score > best_score:
-                best_score = score
-                best_entry = entry
+        if deck_constrained:
+            # Deck-constrained two-phase search (used by the analysis pipeline).
+            # Toplevel (base-state) images are checked first; subfolders are
+            # only searched when the toplevel pass is not confident.  This
+            # prunes the search space — the deck is known so the library is
+            # already small.
+            all_templates = [t for uid in unit_ids
+                             for t in self._index.get(uid, [])]
+            if not all_templates:
+                return MatchResult()
+
+            toplevel = [t for t in all_templates if t.is_toplevel]
+            best_score, best_entry = self._best_match(
+                cell_crop, toplevel, detected_rank, shape_mask)
+
+            if best_score < self.cell_threshold:
+                subdir_entries = [t for t in all_templates if not t.is_toplevel]
+                if subdir_entries:
+                    sub_score, sub_entry = self._best_match(
+                        cell_crop, subdir_entries, detected_rank, shape_mask)
+                    if sub_score > best_score:
+                        best_score, best_entry = sub_score, sub_entry
+        else:
+            # Full-library flat search — no deck constraint (used by
+            # extract_cells and diagnostics).  All templates searched at once
+            # to maximise recall; subfolder organisation is transparent.
+            if not self._templates:
+                return MatchResult()
+            best_score, best_entry = self._best_match(
+                cell_crop, self._templates, detected_rank, shape_mask)
 
         if best_score < self.cell_threshold or best_entry is None:
             return MatchResult(confidence=best_score)
@@ -222,6 +274,46 @@ class TemplateMatcher:
             variant_tag=best_entry.variant_tag,
             confidence=best_score,
         )
+
+    def _best_match(self,
+                    cell_crop: np.ndarray,
+                    entries: list[_TemplateEntry],
+                    detected_rank: int = 0,
+                    shape_mask: Optional[np.ndarray] = None,
+                    ) -> tuple[float, Optional[_TemplateEntry]]:
+        """Return (best_score, best_entry) for a list of template entries.
+
+        When detected_rank > 0 and shape_mask is provided, entries whose
+        merge_rank does not match detected_rank are skipped (rank-constrained
+        search), and masked NCC is used for the remaining comparisons.
+        If ALL entries are filtered out by the rank check, the rank filter is
+        relaxed so that at least the unmasked best match is returned.
+        """
+        best_score = -1.0
+        best_entry: Optional[_TemplateEntry] = None
+
+        rank_filter_active = (detected_rank > 0 and shape_mask is not None)
+
+        for entry in entries:
+            if rank_filter_active and entry.merge_rank != detected_rank:
+                continue
+            score = _max_ncc_score(cell_crop, entry, self.use_rotation,
+                                   shape_mask)
+            if score > best_score:
+                best_score = score
+                best_entry = entry
+
+        # Fallback: if rank filtering eliminated every candidate, retry without
+        # the rank constraint (still apply the mask if available).
+        if best_entry is None and rank_filter_active:
+            for entry in entries:
+                score = _max_ncc_score(cell_crop, entry, self.use_rotation,
+                                       shape_mask)
+                if score > best_score:
+                    best_score = score
+                    best_entry = entry
+
+        return best_score, best_entry
 
     def match_all_cells(self,
                         cell_crops: list[tuple[str, int, int, np.ndarray]],
@@ -275,22 +367,55 @@ class TemplateMatcher:
 # ---------------------------------------------------------------------------
 
 def _parse_reference_filename(unit_id: str,
-                               path: Path) -> Optional[_TemplateEntry]:
+                               path: Path,
+                               subdir_prefix: str = "") -> Optional[_TemplateEntry]:
     """
     Parses a reference image filename.
-    Format: <appearance_state>_rank<N>[_<variant>].png
+
+    Flat format:
+      <appearance_state>_rank<N>[_<variant>].png   e.g. active_rank1.png
+      <appearance_state>_rank_<N>[_<variant>].png  e.g. cordyceps_max_rank_7.png
+
+    Subfolder format (subdir_prefix is the folder name, prepended automatically):
+      <branch>/rank<N>.png  →  effective stem  <branch>_rank<N>
+
+    Everything before the rank token is the appearance state; everything after
+    is the variant tag.
     """
-    stem = path.stem
+    stem  = f"{subdir_prefix}_{path.stem}" if subdir_prefix else path.stem
     parts = stem.split("_")
-    rank_idx = next(
-        (i for i, p in enumerate(parts) if p.startswith("rank") and p[4:].isdigit()),
-        None
-    )
+
+    # Find the index of the "rank" token. Accepts both rank1 (digit attached)
+    # and rank + separate digit token (rank_1 style).
+    rank_idx   = None
+    merge_rank = None
+    skip       = 0   # extra tokens consumed when rank and digit are separate
+
+    for i, p in enumerate(parts):
+        if not p.startswith("rank"):
+            continue
+        after = p[4:]
+        # Strip a trailing -N variant suffix (e.g. "rank1-2" → "1", "rank7-3" → "7")
+        rank_str = after.split("-")[0]
+        if rank_str.isdigit():
+            # Compact form: rank7  or  rank1-2
+            rank_idx   = i
+            merge_rank = int(rank_str)
+            break
+        if after == "" and i + 1 < len(parts):
+            # Spaced form: rank_7  or  rank_1-2  (two tokens)
+            next_rank_str = parts[i + 1].split("-")[0]
+            if next_rank_str.isdigit():
+                rank_idx   = i
+                merge_rank = int(next_rank_str)
+                skip       = 1
+                break
+
     if rank_idx is None:
         return None
-    merge_rank = int(parts[rank_idx][4:])
+
     appearance_state = "_".join(parts[:rank_idx]) or "base"
-    variant_tag = "_".join(parts[rank_idx + 1:]) or None
+    variant_tag      = "_".join(parts[rank_idx + 1 + skip:]) or None
     return _TemplateEntry(
         unit_id=unit_id,
         merge_rank=merge_rank,
@@ -308,18 +433,96 @@ def _resize_to_height(img: np.ndarray, target_h: int) -> np.ndarray:
                       interpolation=cv2.INTER_AREA)
 
 
-def _max_ncc_score(cell_crop: np.ndarray, entry: _TemplateEntry) -> float:
-    """Peak NCC score across all pre-scaled templates for this entry."""
+# Rotation angles tried when use_rotation=True.  0° is always tried first;
+# these are the additional angles.  ±15° and ±30° cover the typical unit
+# orientation variance in Rush Royale without excessive compute.
+_EXTRA_ANGLES = (15, -15, 30, -30)
+
+
+def _rotate_crop(img: np.ndarray, angle: float) -> np.ndarray:
+    h, w = img.shape[:2]
+    M = cv2.getRotationMatrix2D((w / 2, h / 2), angle, 1.0)
+    return cv2.warpAffine(img, M, (w, h),
+                          flags=cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_REPLICATE)
+
+
+def _masked_ncc(crop_gray: np.ndarray,
+                tmpl_gray: np.ndarray,
+                mask: np.ndarray) -> float:
+    """
+    Pearson NCC computed only over pixels where mask > 0.
+
+    This is mathematically correct masked NCC: the mean and standard deviation
+    are calculated from the masked pixels only, so zeroed-out background pixels
+    don't distort the result (unlike passing zeroed images to matchTemplate).
+
+    Returns a value in [-1, 1], or -1.0 when the mask covers too few pixels.
+    Both crop_gray and tmpl_gray must already be the same (h, w).
+    """
+    idx = mask > 0
+    n = int(idx.sum())
+    if n < 64:
+        return -1.0
+
+    a = crop_gray[idx].astype(np.float64)
+    b = tmpl_gray[idx].astype(np.float64)
+
+    a -= a.mean()
+    b -= b.mean()
+
+    denom = math.sqrt((a * a).sum() * (b * b).sum())
+    if denom < 1e-6:
+        return 0.0
+
+    return float(np.clip(np.dot(a, b) / denom, -1.0, 1.0))
+
+
+def _max_ncc_score(cell_crop: np.ndarray,
+                   entry: _TemplateEntry,
+                   use_rotation: bool = False,
+                   shape_mask: Optional[np.ndarray] = None) -> float:
+    """Peak NCC score across all pre-scaled templates for this entry.
+
+    When use_rotation=True, also tries ±15° and ±30° rotations of the crop
+    and returns the best score found.  This accounts for unit sprites that
+    face different directions depending on which enemy they are targeting.
+    Rotation is opt-in because it multiplies matching cost by ~5x.
+
+    When shape_mask is provided (a binary uint8 image from shape_detector),
+    masked NCC is used instead of standard matchTemplate.  The mask is resized
+    to match each template's dimensions before comparison.  This eliminates
+    background/grid pixels from the correlation, giving cleaner scores.
+    """
     best = -1.0
-    for _, template in entry.images.items():
-        th, tw = template.shape[:2]
-        # Resize the crop to the exact template dimensions so NCC is a
-        # direct 1-to-1 comparison regardless of the cell's native aspect ratio.
-        resized = cv2.resize(cell_crop, (tw, th), interpolation=cv2.INTER_AREA)
-        result = cv2.matchTemplate(resized, template, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, _ = cv2.minMaxLoc(result)
-        if max_val > best:
-            best = max_val
+    crops_to_try = [cell_crop]
+    if use_rotation:
+        crops_to_try += [_rotate_crop(cell_crop, a) for a in _EXTRA_ANGLES]
+
+    use_mask = shape_mask is not None
+
+    for crop in crops_to_try:
+        # Convert to grayscale once per crop variant when masking is active
+        crop_gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if use_mask else None
+
+        for _, template in entry.images.items():
+            th, tw = template.shape[:2]
+
+            if use_mask:
+                crop_resized = cv2.resize(crop_gray, (tw, th),
+                                          interpolation=cv2.INTER_AREA)
+                mask_resized = cv2.resize(shape_mask, (tw, th),
+                                          interpolation=cv2.INTER_NEAREST)
+                tmpl_gray    = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+                score        = _masked_ncc(crop_resized, tmpl_gray, mask_resized)
+            else:
+                resized = cv2.resize(crop, (tw, th), interpolation=cv2.INTER_AREA)
+                result  = cv2.matchTemplate(resized, template,
+                                            cv2.TM_CCOEFF_NORMED)
+                _, score, _, _ = cv2.minMaxLoc(result)
+
+            if score > best:
+                best = score
     return best
 
 

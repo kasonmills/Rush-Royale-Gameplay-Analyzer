@@ -84,22 +84,20 @@ _MIN_HEART_AREA = 50
 
 # ---------------------------------------------------------------------------
 # HUD region definitions — (left_frac, top_frac, right_frac, bottom_frac)
-# Calibrated from reference diagram (360×640 portrait).
-# HUD strip is vertically ~40–56% of frame height.
-# All three readings are stacked in the LEFT column of the HUD strip.
+# Ground-truthed from grid_ruler_reference.png (720×1616 phone recording).
 # ---------------------------------------------------------------------------
 
-# Opponent castle HP: heart/skull icons (x=0–20%, y=40–45%; ±5% buffer).
-_OPP_HP_REGION = (0.00, 0.35, 0.25, 0.50)
+# Opponent castle HP: heart/skull icons (x=2–10%, y=42–45%).
+_OPP_HP_REGION = (0.02, 0.42, 0.20, 0.45)
 
-# Wave number digit (x=0–10%, y=45–50%; ±5% buffer).
-_WAVE_REGION = (0.00, 0.40, 0.15, 0.55)
+# Wave number digit (x=0–11%, y=45–47%).
+_WAVE_REGION = (0.00, 0.45, 0.11, 0.47)
 
-# Player castle HP: red heart icons — RIGHT side of HUD (x=65–90%, y=40–50%; ±5% buffer).
-_PLAYER_HP_REGION = (0.60, 0.35, 0.95, 0.55)
+# Player castle HP: red heart icons — right side of HUD (x=81–98%, y=46–49%).
+_PLAYER_HP_REGION = (0.81, 0.46, 0.98, 0.49)
 
-# Summon button: yellow/gold = ready to summon, gray = blocked (x=35–65%, y=85–95%; ±5% buffer).
-_SUMMON_BTN_REGION = (0.30, 0.80, 0.70, 1.00)
+# Summon button: yellow/gold = ready to summon, gray = blocked (x=38–63%, y=85–91%).
+_SUMMON_BTN_REGION = (0.38, 0.85, 0.63, 0.91)
 
 
 @dataclass
